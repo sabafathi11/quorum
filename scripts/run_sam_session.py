@@ -213,6 +213,12 @@ def main() -> int:
     ap.add_argument("--streams", default="", help="only these stream keys, e.g. cam1,cam2")
     ap.add_argument("--frame-stride", type=int, default=5, help="process every Nth frame")
     ap.add_argument("--max-resolution", type=int, default=720, help="downscale to this many px")
+    ap.add_argument("--chunk-frames", type=int, default=0,
+                    help="window size; 0 leaves the job default (64). The blunt VRAM dial — "
+                         "the predictor holds a whole window, so halving this roughly halves "
+                         "the peak. Lower it before lowering resolution: a smaller window "
+                         "costs identity continuity at the seams, a smaller frame costs recall "
+                         "on everything small.")
     ap.add_argument("--force", action="store_true", help="redo streams that already have an XML")
     ap.add_argument("--skip-ingest", action="store_true",
                     help="the capture is already built; go straight to annotating")
@@ -268,9 +274,13 @@ def main() -> int:
         "prompts": args.prompts, "labels": args.labels, "streams": args.streams,
         "frame_stride": args.frame_stride, "max_resolution": args.max_resolution,
     }
+    if args.chunk_frames:
+        sam_params["chunk_frames"] = args.chunk_frames
     job = [py, "-m", "quorum", "job", "sam.auto", f"capture_id={cid}",
            f"prompts={args.prompts}", f"frame_stride={args.frame_stride}",
            f"max_resolution={args.max_resolution}"]
+    if args.chunk_frames:
+        job.append(f"chunk_frames={args.chunk_frames}")
     if args.labels:
         job.append(f"labels={args.labels}")
     if args.streams:
