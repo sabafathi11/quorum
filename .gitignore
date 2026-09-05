@@ -8,3 +8,12 @@ quorum.toml
 .mutants-in-flight/
 .env
 plugins/sam/annotator/__pycache__/
+
+# Session recordings. 150-207 MB each, and GitHub refuses anything over 100 MB,
+# so they live in Drive and `beefline_records/fetch_session.sh` puts them here.
+# The pattern also covers the symlinks used on the box that holds the records
+# disk: committing one would hand a Windows clone a broken link rather than a
+# video. Everything else under beefline_records/ — the SAM xml, the manifests —
+# is exactly what is meant to be in git.
+beefline_records/**/*.mp4
+beefline_records/**/.session.zip

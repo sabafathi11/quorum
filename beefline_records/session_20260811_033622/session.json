@@ -1,0 +1,86 @@
+{
+  "session": "session_20260811_033622",
+  "stamp": "20260811_033622",
+  "cameras": [
+    {
+      "key": "cam1",
+      "file": "cam1_20260811_033622.mp4",
+      "bytes": 166674101,
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "frames": 15009,
+      "duration": 600.025
+    },
+    {
+      "key": "cam2",
+      "file": "cam2_20260811_033622.mp4",
+      "bytes": 151194321,
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "frames": 14197,
+      "duration": 600.005
+    },
+    {
+      "key": "cam3",
+      "file": "cam3_20260811_033622.mp4",
+      "bytes": 157259407,
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "frames": 14990,
+      "duration": 600.005
+    },
+    {
+      "key": "cam4",
+      "file": "cam4_20260811_033622.mp4",
+      "bytes": 157276155,
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "frames": 14990,
+      "duration": 600.004
+    },
+    {
+      "key": "cam5",
+      "file": "cam5_20260811_033622.mp4",
+      "bytes": 157325457,
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "frames": 14990,
+      "duration": 600.004
+    },
+    {
+      "key": "cam6",
+      "file": "cam6_20260811_033622.mp4",
+      "bytes": 157354090,
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "frames": 14990,
+      "duration": 600.004
+    },
+    {
+      "key": "cam7",
+      "file": "cam7_20260811_033622.mp4",
+      "bytes": 207579778,
+      "codec": "hevc",
+      "width": 2592,
+      "height": 1904,
+      "frames": 7516,
+      "duration": 600.0
+    }
+  ],
+  "videos": {
+    "in_git": false,
+    "drive": "gdrive:beefline_records/session_20260811_033622.zip",
+    "fetch": "beefline_records/fetch_session.sh 20260811_033622"
+  },
+  "sam": {
+    "dir": "sam/",
+    "state": "not run yet"
+  },
+  "updated": "2026-09-05T06:59:18+00:00"
+}
