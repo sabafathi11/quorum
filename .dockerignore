@@ -1,0 +1,13 @@
+# The build context is small on purpose: `data/` alone is 387 MB of real
+# annotations, and a docker build that ships them somewhere is a mistake made
+# once and discovered much later.
+data/
+.venv/
+.git/
+__pycache__/
+*.pyc
+tests/node_modules/
+.mutants-in-flight/
+.dev.pid
+.env
+quorum.toml

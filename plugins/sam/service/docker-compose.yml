@@ -1,0 +1,60 @@
+# The one model. Everything that segments anything goes through this.
+#
+#   cd plugins/sam/service
+#   docker compose up -d --build
+#
+# It replaces the two nuclio functions Quorum used to talk to. Those held a
+# tracker-only assembly of SAM 3.1 (4,902 MiB, resident from deploy) that could
+# not answer a text prompt, so every auto run started a *second* container and
+# built the full predictor again — 23,841 of 24,564 MiB at peak, 97%, on a card
+# shared with other people's work. One predictor here does all three jobs and
+# the same run peaks at 16,978 MiB.
+#
+# `annotator/` is mounted rather than copied for the same reason Quorum mounts
+# `plugins/`: it is a verbatim vendored copy of `sam3_auto_annotator`, and
+# editing it should mean a restart rather than an image rebuild.
+services:
+  sam-service:
+    build:
+      context: .
+      args:
+        # The image the model was measured on. This layer adds three files to
+        # it; it never rebuilds torch or re-downloads the 4 GB checkpoint.
+        SAM_IMAGE: "${SAM_IMAGE:-cvat.pth.comfyorg.sam3.1:latest-gpu}"
+    image: sam-service:local
+    container_name: sam-service
+    restart: unless-stopped
+    # The whole point. Without it this is a very slow CPU implementation.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      # A *constructor* argument of the predictor, so it is fixed for the life
+      # of the process and the per-job flag was removed rather than silently
+      # ignored. Raising it costs VRAM on every request, not just the batch.
+      SAM_MAX_OBJECTS: "${SAM_MAX_OBJECTS:-20}"
+      SAM_ANNOTATOR: /annotator
+    volumes:
+      - "${ANNOTATOR:-../annotator}:/annotator:ro"
+      # The videos, and Quorum's data directory, at the paths Quorum knows them
+      # by — so a job description can name a file and neither side translates.
+      - "${RECORDS:?set RECORDS to where the camera videos are}:${RECORDS}:ro"
+      - "${DATA:?set DATA to Quorum's data directory}:${DATA}"
+    ports:
+      # Loopback only: Quorum reaches it by container name on the shared
+      # network, and this is for looking at it by hand.
+      - "127.0.0.1:${SAM_PORT:-32950}:8080"
+    networks:
+      - sam
+
+networks:
+  # The network Quorum is on. `external`, because Quorum's compose made it and
+  # two projects claiming one network is how you get a name collision on the
+  # day you restart the wrong one first.
+  sam:
+    external: true
+    name: "${SAM_NETWORK:-cvat_cvat}"

@@ -1,0 +1,10 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+tests/node_modules/
+tests/package-lock.json
+quorum.toml
+.mutants-in-flight/
+.env
+plugins/sam/annotator/__pycache__/

@@ -1,0 +1,7 @@
+{
+  "name": "quorum-smoke",
+  "private": true,
+  "type": "module",
+  "description": "Browser smoke test for the Quorum client. Only needed to run tests/smoke.mjs.",
+  "devDependencies": { "jsdom": "^26.0.0" }
+}

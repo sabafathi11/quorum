@@ -1,0 +1,88 @@
+# Quorum on the box that has the GPU and the SAM container.
+#
+#   cp .env.example .env      # set TREE, and SAM_NETWORK if yours differs
+#   docker compose up -d --build
+#   → http://127.0.0.1:8600
+#
+# **The tree is mounted at the same path it has on the host.** That is the one
+# decision here worth reading twice. A capture's media path is stored in the
+# database as an absolute path, so a container that mounted the tree somewhere
+# tidy like /srv/annotation would come up fine, list every capture, and show
+# six black rectangles — and a database made in the container would then be
+# unusable outside it. Mounting it where it already lives makes the two ways of
+# running this the *same installation*: stop the container, run `./run.sh`, and
+# nothing has moved.
+#
+# What each mount is for:
+#
+#   the tree, read-only   the camera videos and `sync_id_ui/data/<stamp>/`.
+#                         `media_roots` is the boundary — nothing outside it is
+#                         readable over HTTP whatever a provider puts in a path
+#                         — and read-only enforces the rule the whole project
+#                         has: inputs are never written.
+#   the data directory    sqlite, uploads, renditions, exports and the
+#                         auto-annotator's XML. Nested inside the tree, mounted
+#                         read-write over the read-only one.
+#   plugins/ and web/     there is no build step: a plugin's UI is a file the
+#                         server hands out. Bind-mounting them means editing a
+#                         plugin is a page reload rather than an image rebuild,
+#                         which is the whole reason the TODO said "dockerise,
+#                         if it does not slow the build/test cycle".
+#   docker.sock           only for the auto-annotator. See the comment on it.
+services:
+  quorum:
+    build:
+      context: .
+      args:
+        # 1 installs the docker CLI, which the auto-annotator needs to start the
+        # SAM 3.1 image. Leave it 0 and everything else still works — the SAM
+        # panel says "no docker" and the `auto` job is refused with that reason,
+        # while the interactor and the tracker are untouched.
+        WITH_DOCKER: "${WITH_DOCKER:-1}"
+    image: quorum:local
+    container_name: quorum
+    restart: unless-stopped
+    # As you, not as root. `data/` is shared with `./run.sh` on the host, and a
+    # container writing root-owned files into it breaks the host-side server
+    # later, quietly: a cached still ffmpeg cannot overwrite, a composition that
+    # retries, a timeline repainting when it should not. That cost an afternoon
+    # to recognise once; `id -u`, `id -g` is the whole fix.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # …and the socket is root:docker 0660, so reaching it needs that group
+    # rather than root. `getent group docker | cut -d: -f3`.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    ports:
+      - "${BIND:-127.0.0.1}:${PORT:-8600}:8600"
+    volumes:
+      - "${TREE:?set TREE in .env to the absolute path of the annotation tree}:${TREE}:ro"
+      - "${DATA:-${TREE}/quorum/data}:${DATA:-${TREE}/quorum/data}"
+      - "${TREE}/quorum/plugins:/srv/quorum/plugins:ro"
+      - "${TREE}/quorum/web:/srv/quorum/web:ro"
+      # The auto-annotator drives the host's daemon to run the GPU image. This
+      # is real privilege — a container that can talk to the daemon can do
+      # anything the daemon can — so it is here, visible, on one line you can
+      # delete. Without it the interactor and the tracker work as normal and
+      # the auto-annotator refuses with a reason.
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # The entrypoint renders quorum.toml from these two. Everything else the
+      # container needs to be told follows from them.
+      TREE: "${TREE}"
+      DATA: "${DATA:-${TREE}/quorum/data}"
+      # Overrides `[plugins.sam] url`. By container name, not by published
+      # port: nuclio republishes on a new random host port on every deploy.
+      SAM_URL: "${SAM_URL:-http://nuclio-nuclio-pth-comfyorg-sam3-1-v2:8080/}"
+      QUORUM_AUTH: "${QUORUM_AUTH:-open}"
+    networks:
+      - default
+      - sam
+
+networks:
+  # The network the SAM function's container is already on. `external` because
+  # nuclio made it, not us — compose must join it, never try to own it.
+  #   docker inspect -f '{{range $$k,$$v := .NetworkSettings.Networks}}{{$$k}} {{end}}' \
+  #     nuclio-nuclio-pth-comfyorg-sam3-1-v2
+  sam:
+    external: true
+    name: "${SAM_NETWORK:-cvat_cvat}"

@@ -1,0 +1,30 @@
+# The GPU box. Overlay, not a replacement:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.vm3090.yml up -d --build
+#
+# Three things differ there and nowhere else, and each is here because of a fact
+# about that machine rather than a preference:
+#
+#   the records mount   the camera videos are not in the tree. They are under
+#                       /media/jvn-server/…/records, which is `drwxr-x--- root`
+#                       — the ssh account cannot read it and has no passwordless
+#                       sudo, but the docker daemon can. `$RECORDS` makes it a
+#                       second `media_roots` entry; nothing outside the roots is
+#                       ever served, so this widens the boundary deliberately
+#                       and visibly rather than by loosening the rule.
+#   root                which is why `user:` is overridden back to root. On the
+#                       laptop running as you matters because `data/` is shared
+#                       with `./run.sh` on the host; here there is no host-side
+#                       run at all (that box has python 3.8, and Quorum needs
+#                       3.11 for tomllib), and root is what can read the videos.
+#   127.0.0.1           it stays on loopback and you reach it with
+#                       `ssh -L 8600:127.0.0.1:8600 vm.3090`. That box already
+#                       publishes fifteen services on 0.0.0.0; this is not
+#                       going to be the sixteenth.
+services:
+  quorum:
+    user: "0:0"
+    environment:
+      RECORDS: "${RECORDS:-/media/jvn-server/185A27335A270CD6/saba/records}"
+    volumes:
+      - "${RECORDS:-/media/jvn-server/185A27335A270CD6/saba/records}:${RECORDS:-/media/jvn-server/185A27335A270CD6/saba/records}:ro"

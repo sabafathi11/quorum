@@ -1,0 +1,49 @@
+# Copy to quorum.toml to override any default. Paths are relative to this file.
+
+host = "127.0.0.1"
+port = 8600
+
+# "open"  — one operator, no login (the posture the desktop tools have today)
+# "token" — bearer tokens from the users table; make one with:
+#             .venv/bin/python -m quorum user alice --role reviewer
+auth_mode = "open"
+dev_user  = "local"
+
+jobs_workers = 2
+
+# Nothing outside these roots is ever readable over HTTP, whatever a provider
+# puts in a media path.
+media_roots = [".."]
+
+# plugin_paths = ["plugins", "/opt/quorum-plugins"]
+# plugins_enabled = ["grid_capture", "mask_layer", "identity", "proposals", "cvat_xml"]
+
+# Per-plugin settings arrive as `ctx.settings("key")`.
+# [plugins.grid_capture]
+# root = ".."
+# prepared_dir = "../sync_id_ui/data"
+
+# [plugins.sam]
+# Where the SAM 3.1 nuclio function answers. By container name on a shared
+# docker network rather than by published port: nuclio republishes on a new
+# random host port on every deploy. $SAM_URL overrides this.
+# url = "http://nuclio-nuclio-pth-comfyorg-sam3-1-v2:8080/"
+#
+# The image the auto-annotator starts. Quorum never pulls it.
+# image = "cvat.pth.comfyorg.sam3.1:latest-gpu"
+# gpus = "all"
+#
+# Run your own checkout of sam3_auto_annotator instead of the vendored copy.
+# annotator_dir = "/home/you/Codes/newlabelstudio/sam3_auto_annotator"
+#
+# Only when Quorum itself is in a container: `docker run -v` is read by the
+# daemon, so a path handed to it must be named as the *host* sees it. Compose
+# sets $QUORUM_PATH_MAP instead, which wins over this.
+# path_map = [["/srv/quorum/plugins", "/home/you/annotation/quorum/plugins"]]
+#
+# Who the SAM container runs as. Empty (the default) means the image's own
+# user, which is root — how upstream's run.sh has always run it. The XML it
+# writes is then root-owned; the directory is Quorum's, so those files can
+# still be replaced and deleted, but set this if you would rather they were
+# not.  id -u ; id -g
+# run_as = "1000:1000"

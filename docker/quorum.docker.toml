@@ -1,0 +1,57 @@
+# Template for the container's `quorum.toml`. `docker/entrypoint.sh` renders it
+# into /run/quorum.toml at start, substituting the two placeholders below with
+# the paths the deployment actually uses. It is a template rather than a file because those
+# two paths are not known when the image is built, and every setting below that
+# differs from `quorum.toml.example` differs only because of them.
+#
+# To use your own instead: mount it and set QUORUM_CONFIG to where you mounted
+# it. The entrypoint then leaves this alone.
+
+host = "0.0.0.0"          # the port is published by compose, not by binding wide here
+port = 8600
+
+auth_mode = "open"
+dev_user  = "local"
+
+jobs_workers = 2
+
+# Absolute, because a relative path in a config file resolves against the file,
+# and this file lives in /run rather than beside the data.
+data_dir   = "@DATA@"
+db_path    = "@DATA@/quorum.db"
+blob_dir   = "@DATA@/blobs"
+upload_dir = "@DATA@/uploads"
+cache_dir  = "@DATA@/cache"
+
+# The annotation tree, mounted at *the same path it has on the host* — which is
+# what lets a database made by `./run.sh` keep working in the container, since
+# every media path stored in it still resolves. Nothing outside these roots is
+# ever readable over HTTP, whatever a provider puts in a path.
+#
+# $RECORDS adds a second root, for a deployment where the camera videos live
+# somewhere else entirely — on the GPU box they are under /media/jvn-server,
+# outside any tree.
+media_roots = [@ROOTS@]
+
+[plugins.grid_capture]
+root = "@TREE@"
+prepared_dir = "@TREE@/sync_id_ui/data"
+
+[plugins.sam]
+# The nuclio function, by *container name* on CVAT's docker network (`cvat_cvat`
+# — it is a CVAT serverless function, and `deploy_gpu.sh` puts it there). Not by
+# published host port: nuclio republishes on a new random one on every deploy,
+# which is why `sync_id_ui/sam_tunnel.sh` had to ask `docker port` for it. The
+# container port and the name are stable. $SAM_URL overrides this.
+url = "http://nuclio-nuclio-pth-comfyorg-sam3-1-v2:8080/"
+
+# The image the auto-annotator runs. Quorum never pulls it: it lives on the GPU
+# host, and the job says so plainly if the daemon does not have it.
+image = "cvat.pth.comfyorg.sam3.1:latest-gpu"
+gpus = "all"
+
+# `docker run -v` is read by the *daemon*, so a path handed to it must be named
+# as the host sees it. The tree and the data directory are already mounted at
+# their host paths, so only the code needs translating — the auto-annotator
+# bind-mounts `plugins/sam/annotator` into the SAM image.
+path_map = [["/srv/quorum/plugins", "@TREE@/quorum/plugins"]]
