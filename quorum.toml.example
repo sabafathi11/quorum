@@ -40,10 +40,13 @@ media_roots = [".."]
 # Run your own checkout of sam3_auto_annotator instead of the vendored copy.
 # annotator_dir = "/home/you/Codes/newlabelstudio/sam3_auto_annotator"
 #
-# Only when Quorum itself is in a container: `docker run -v` is read by the
-# daemon, so a path handed to it must be named as the *host* sees it. Compose
-# sets $QUORUM_PATH_MAP instead, which wins over this.
-# path_map = [["/srv/quorum/plugins", "/home/you/annotation/quorum/plugins"]]
+# There is no path_map any more. It belonged to the design where Quorum drove
+# `docker run` itself; the auto-annotator is now an HTTP call to the service,
+# which is handed `--video <path> --output <path>` and opens both on its own
+# filesystem. So the rule is simpler and stricter: **the auto-annotator only
+# works when Quorum and the service can see the same files at the same paths.**
+# The interactor and the tracker are unaffected — they post frames as bytes, so
+# those two work fine against a service on another machine.
 #
 # Who the SAM container runs as. Empty (the default) means the image's own
 # user, which is root — how upstream's run.sh has always run it. The XML it

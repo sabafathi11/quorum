@@ -12,15 +12,23 @@ and this file is only the three things Quorum has to add:
     2. turn its stdout into progress, and a cancel into a dead container
     3. import the CVAT XML it writes, as a `provenance="model"` mask layer
 
-**Why `docker run` rather than a library call.** The model needs the SAM 3.1
-image (torch, the weights, `PYTHONPATH=/opt/nuclio/sam`) and a GPU; Quorum's
-own image has none of that and should not grow it. So the job drives the
-docker daemon on the host — the same daemon that runs the SAM container — which
-works identically whether Quorum is running on that host or in a container with
-`/var/run/docker.sock` mounted. The one thing that differs is paths: a `-v`
-argument is read by the *daemon*, so it must name a directory as the **host**
-sees it. `hostpath()` is the whole of that difference; `$QUORUM_PATH_MAP` (set
-by compose) or `path_map` in `quorum.toml` is how you tell it.
+**One filesystem, and this is the constraint that matters.** The job is an HTTP
+call to the service, but what it sends is a *path*: the service runs
+`main.py --video <path> --output <path>` and opens both itself. So Quorum and
+the service have to see the same files at the same names — which they do when
+they are on one host, and cannot when they are not.
+
+That makes the three sizes of SAM differ in where they can run, and it is worth
+being blunt about it because the failure is otherwise mystifying:
+
+    interactor   posts the frame as bytes        -> works against any endpoint
+    tracker      posts the frames as bytes       -> works against any endpoint
+    auto         posts a path, gets a path back  -> same machine only
+
+An earlier design had Quorum drive `docker run` and translate paths for the
+daemon; `hostpath()` and `path_map` were that translation. Both are gone. If
+this ever needs to run against a remote service, the thing to add is a transfer
+— the video up, the XML back — not a mapping table.
 
 **Never parallel.** The GPU is shared — with the interactor, and on that box
 with whatever else is using it. Streams run one after another, exactly as the
