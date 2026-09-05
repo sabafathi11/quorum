@@ -37,6 +37,14 @@ live in Drive, and `fetch_session.sh` puts them where this file says they are.
 That is the only thing the split changes: the layout above is what you end up
 with either way.
 
+One thing to check the first time, rather than assume: the same 100 MB limit
+applies to the XML. A ten-minute camera at stride 5 is ~3,000 annotated frames,
+and how big that lands depends entirely on how many tracks SAM finds. `run.json`
+records every file's size, so look before pushing — if a camera's XML is over
+100 MB, gzip it (`cvat_xml` reads a directory of `*.xml`, so a `.xml.gz` would
+need unpacking first) or move that session's annotations into the Drive zip
+alongside the videos and say so here.
+
 The filenames are load-bearing and must not be changed. Quorum takes each
 stream's key from the name — `cam3_20260811_033622.mp4` → `cam3` — and keys the
 whole capture by the stamp the files share. Renaming them to `camera_01.mp4`
