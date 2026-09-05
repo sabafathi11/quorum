@@ -55,20 +55,56 @@ folder in Drive.
 
 ---
 
-## Part 2 — on their machine (once)
+## Part 2 — on their machine, once
+
+### 2.1 Join the tailnet
+
+Install Tailscale, sign in, accept the invitation. Then prove the box is
+reachable before touching anything else — every later step depends on it:
 
 ```powershell
-winget install Gyan.FFmpeg          # reopen the shell afterwards
-winget install Python.Python.3.11
-# install Tailscale, sign in, confirm the box is visible
+ping 100.95.156.1
+curl.exe http://100.95.156.1:32950/health
+```
 
+The second should answer `{"ok": true, "vram": {...}, "busy": false, ...}`. If it
+does not, nothing SAM-related will work and the fix is on the box (Part 1.1),
+not here.
+
+### 2.2 Install the two things Python cannot install for itself
+
+```powershell
+winget install Gyan.FFmpeg
+winget install Python.Python.3.11
+```
+
+**Close and reopen PowerShell**, or `ffprobe` will not be on `PATH` yet. Check:
+
+```powershell
+ffprobe -version
+py -3.11 --version
+```
+
+`ffmpeg` is not optional. It is how every frame timestamp is read, how stills
+are cut, and how the interactor gets a frame out of a video. Without it, capture
+building refuses outright.
+
+### 2.3 Clone and install
+
+```powershell
 git clone https://github.com/sabafathi11/quorum.git
 cd quorum
 py -3.11 -m venv .venv
 .venv\Scripts\pip install -e .
 ```
 
-Then `quorum.toml` in the clone — the SAM line is what buys them the interactor:
+`pip install -e .` rather than installing fastapi and uvicorn by hand: on the
+lab boxes numpy comes from the system python, and on Windows there is none, so
+installing the package itself is what makes the venv complete.
+
+### 2.4 Configure
+
+Create `quorum.toml` in the clone:
 
 ```toml
 media_roots = ["beefline_records"]
@@ -77,68 +113,155 @@ media_roots = ["beefline_records"]
 url = "http://100.95.156.1:32950/"
 ```
 
+`media_roots` is what the server is willing to read from disk. The default is
+the clone's *parent* directory, which on a laptop is a whole home folder;
+naming `beefline_records` keeps it to the videos. The `[plugins.sam]` block is
+what buys the interactor — without it the SAM panel has nothing to talk to.
+
 ---
 
-## Part 3 — a session, start to finish
+## Part 3 — a session, in detail
 
-**1. Get the videos.** Download `session_<stamp>.zip` from the Drive folder, then:
+Everything below uses `20260811_033622` as the stamp. Substitute another and
+nothing else changes.
+
+### 3.1 Get the videos
+
+Download `session_20260811_033622.zip` (1.1 GB) from the shared Drive folder,
+then unpack it into place:
 
 ```powershell
 cd beefline_records
-.\fetch_session.ps1 <stamp> C:\Users\you\Downloads\session_<stamp>.zip
+.\fetch_session.ps1 20260811_033622 C:\Users\you\Downloads\session_20260811_033622.zip
 cd ..
 ```
 
-**2. Build the capture.** Note the id it prints.
+Expect seven files, `cam1_20260811_033622.mp4` through `cam7_`, about 1.1 GB
+total. **Do not rename them.** Quorum takes each stream's key from the filename
+— `cam3_20260811_033622.mp4` → `cam3` — and keys the whole capture by the stamp
+they share. Renaming breaks the link between a video and the annotations for it.
+
+### 3.2 Build the capture
+
+Let PowerShell assemble the path list rather than typing seven paths by hand:
 
 ```powershell
-.venv\Scripts\python -m quorum ingest multiview.disk paths="[\"beefline_records/session_<stamp>/cam1_<stamp>.mp4\", ...all cameras...]"
+$files = @(Get-ChildItem beefline_records\session_20260811_033622\*.mp4 |
+           ForEach-Object { $_.FullName -replace '\\','/' })
+$json  = ConvertTo-Json -InputObject $files -Compress
+.venv\Scripts\python -m quorum ingest multiview.disk "paths=$json"
 ```
 
-**3. Make the video playable.** These recordings are HEVC and no browser decodes
-them, so until this finishes every cell is black. One ffmpeg transcode per
-camera, minutes each.
+This reads every video's real frame timestamps, picks one capture timeline,
+builds a frame map per camera and lays out a grid. A minute or two for seven
+cameras. It prints a JSON block ending in something like:
+
+```
+"capture_id": 1,
+"message": "7 view(s), 15009 frames at 25.014 fps — cam1 … cam7 need a browser rendition"
+```
+
+**Write down the `capture_id`.** Every later command needs it. The "need a
+browser rendition" warning is expected and is the next step.
+
+### 3.3 Make the video playable
 
 ```powershell
 .\run.ps1
 ```
-Then **⚙ Capture → Streams → Prepare video…**
 
-**4. Auto-annotate — on the box, not here.** Open `http://100.95.156.1:8600`,
-paste the token when asked, open the same session's capture, and:
+Open **http://127.0.0.1:8600**, open the capture, then **⚙ Capture → Streams →
+Prepare video…**, leave the renditions at `grid,full`, press Run.
 
-- **SAM workspace (✦) → Auto-annotate**: type the prompts (`person`), press Run.
-  Progress is per window and there is a Stop button. Hours, not minutes.
-- When it finishes, **Data → Export → CVAT XML**, and download the file it
-  leaves.
+These recordings are HEVC 1920×1080 (cam7 is 2592×1904) and no browser decodes
+HEVC, so **until this finishes every cell is black** — that is not a bug and it
+is the single most common way this looks broken. It is one ffmpeg transcode per
+camera, several minutes each, seven cameras. It is a job: progress and a Stop
+button, and it survives closing the tab.
 
-**5. Import what came back.** On their own machine, unzip the export into
-`beefline_records/session_<stamp>/sam/` and:
+Quorum then proves each rendition is frame-aligned with its source and refuses
+one that is not, because an unaligned rendition puts every mask a frame out —
+which looks fine and is wrong.
+
+### 3.4 Auto-annotate — on the box, in a browser
+
+This is the one step that does not happen on their machine.
+
+1. Open **http://100.95.156.1:8600**.
+2. A dialog appears saying *"paste the token an admin gave you"*. Paste it. It
+   is kept in that browser's localStorage, so this happens once.
+3. Open the capture for the same session.
+4. Go to the **SAM workspace (✦)** and find the **Auto-annotate** panel.
+5. Press **Run the auto-annotator…**. In the dialog: prompts `person`, one per
+   line. Use singular nouns — text grounding keys on the noun. Leave the rest at
+   their defaults unless told otherwise. Press **Start**.
+6. Progress appears per window, in the panel and in **Jobs**. **Stop** kills it.
+   This is hours, not minutes — one camera at a time, on a shared GPU.
+
+When it finishes, the tracks land as a `provenance="model"` layer on that
+capture. To bring them home:
+
+7. **Data → Export**, choose **CVAT XML**, run it.
+8. The Data panel lists what the exporter wrote, with a **↓** button. The export
+   is one file per camera, so it comes down as a single **zip**.
+
+### 3.5 Import the annotations locally
+
+Unzip what they downloaded into the session's `sam/` folder:
 
 ```powershell
-.venv\Scripts\python -m quorum job cvat_xml.import:tracks capture_id=<id> dir=beefline_records/session_<stamp>/sam layer=sam_auto name="SAM auto" provenance=model
+Expand-Archive tracks.zip -DestinationPath beefline_records\session_20260811_033622\sam
 ```
 
-**6. Annotate.** Everything from here is local and needs nothing from the box
-except the interactor:
+Then import — one command for the whole session, because the importer takes a
+directory, globs `*.xml` and matches each file to a stream by the key in its
+name:
 
-- **✎ Edit** — split, join, delete, repaint tracks. Every edit is an undoable op.
-- **✦ SAM** — left-click a person for a mask, right-click to subtract, `Enter`
-  to write it; `R` carries it forward. This is the part that works remotely.
-- **◈ Identity** — stitch tracks across cameras.
-- **✓ Review** — the proposal queue.
+```powershell
+.venv\Scripts\python -m quorum job cvat_xml.import:tracks capture_id=1 `
+  dir=beefline_records/session_20260811_033622/sam `
+  layer=sam_auto name="SAM auto" provenance=model
+```
 
-[docs/MANUAL.md](MANUAL.md) covers all of it in detail.
+It prints how many files matched and how many keyframes landed. A file whose
+name matches no stream is skipped and said so, rather than silently dropped.
+
+### 3.6 Annotate
+
+Reload **http://127.0.0.1:8600**. The masks are now ordinary tracks.
+
+- **✎ Edit** — `Alt`+click selects a track. Split, join, delete, restore. Every
+  edit is an op: it is in **History** and `Ctrl+Z` takes it back.
+- **✦ SAM** — left-click a person to add a positive point, right-click for a
+  negative one, `Backspace` drops the last point, **`Enter` writes the mask**.
+  Nothing is stored until `Enter`. With a track selected, `Enter` repaints that
+  track at this frame; with nothing selected it makes a new one. **`R`**
+  propagates the selected mask forward, `Shift+R` backward — one job, one op, so
+  one `Ctrl+Z` takes all of it back. *This is the part that works over the
+  tailnet, because it posts frames as bytes.*
+- **◈ Identity** — the only thing that spans cameras. `N` walks unassigned tracks.
+- **✓ Review** — the proposal queue. Accepting one appends that op, attributed
+  to them.
+
+[MANUAL.md](MANUAL.md) is the full reference; §9 is mask editing, §12 is SAM.
 
 ---
 
 ## When something looks wrong
 
-- **Every cell is black.** The renditions are not built. Step 3.
+- **Every cell is black.** The renditions are not built. §3.3.
+- **`ffprobe is not on PATH`.** They did not reopen PowerShell after installing
+  ffmpeg. §2.2.
 - **The SAM panel says the service is not answering.** Either `SAM_BIND` was not
-  set on the box, or their Tailscale is down. `curl http://100.95.156.1:32950/health`
-  answers `{"ok": true, …}` when it is fine.
-- **Auto-annotate is missing or refuses on their machine.** Expected — it is the
-  one mode that cannot cross the network. Part 3 step 4.
-- **A camera's masks lag then jump.** That is `frame_stride`. At stride 5 a mask
-  is written every 5th frame and holds in between.
+  set on the box (Part 1.1) or their Tailscale is down. `curl.exe
+  http://100.95.156.1:32950/health` is the one-line test.
+- **A 403 on a video, right after a successful ingest.** The videos are outside
+  `media_roots`. §2.4.
+- **Auto-annotate is missing or refuses on their machine.** Expected. It is the
+  one mode that cannot cross a network — it sends a path and gets a path back.
+  §3.4.
+- **Masks lag the person, then jump.** That is `frame_stride`. At the default 5
+  a mask is written every 5th frame and holds in between.
+- **A camera fragmented into dozens of short tracks.** Read its
+  `*_freezes.json`. These recorders drop up to half their wall clock and every
+  hole ends a track; no identity is ever carried across a hole.
