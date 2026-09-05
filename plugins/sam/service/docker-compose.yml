@@ -45,9 +45,15 @@ services:
       - "${RECORDS:?set RECORDS to where the camera videos are}:${RECORDS}:ro"
       - "${DATA:?set DATA to Quorum's data directory}:${DATA}"
     ports:
-      # Loopback only: Quorum reaches it by container name on the shared
+      # Loopback by default: Quorum reaches it by container name on the shared
       # network, and this is for looking at it by hand.
-      - "127.0.0.1:${SAM_PORT:-32950}:8080"
+      #
+      # $SAM_BIND widens that to one more address — in practice the tailnet one,
+      # so an annotator running Quorum on their own laptop can use the
+      # interactor and the tracker, both of which post frames as bytes. Set it
+      # to a specific address, never 0.0.0.0: this service has no authentication
+      # of any kind, and this box also has a public address.
+      - "${SAM_BIND:-127.0.0.1}:${SAM_PORT:-32950}:8080"
     networks:
       - sam
 
