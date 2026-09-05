@@ -86,6 +86,36 @@ killing things by name:
 
 Open **http://127.0.0.1:8600**. You land on the lobby.
 
+### On Windows
+
+Same server, three differences in how you get it running — a Windows venv puts
+the interpreter somewhere else, there is no system numpy to inherit, and ffmpeg
+is not installed for you:
+
+```powershell
+winget install Gyan.FFmpeg          # then reopen the shell so PATH is picked up
+py -3.11 -m venv .venv
+.venv\Scripts\pip install -e .
+.\run.ps1                           # → http://127.0.0.1:8600
+```
+
+`run.ps1` and `dev.ps1` are the twins of `run.sh` and `dev.sh` and take the same
+arguments: `.\run.ps1 --port 8611`, `.\dev.ps1 start|stop|restart|log 80`.
+
+Two settings worth putting in `quorum.toml` before you start:
+
+```toml
+media_roots = ["C:/Users/you/videos"]   # the default is the clone's parent directory
+
+[plugins.sam]
+url = "http://127.0.0.1:9000/"          # a SAM service you can reach; see §12
+```
+
+Everything in this manual applies unchanged after that, except that the
+**Auto-annotate** panel needs docker and an NVIDIA GPU on the machine running
+the server, so on a laptop it will say so. Clicking a person and propagating a
+mask do not — they need `ffmpeg` here and a reachable service there.
+
 ### ffmpeg
 
 Quorum reads frame timestamps and cuts still frames with `ffmpeg`/`ffprobe`. If

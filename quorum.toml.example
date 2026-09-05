@@ -12,8 +12,12 @@ dev_user  = "local"
 jobs_workers = 2
 
 # Nothing outside these roots is ever readable over HTTP, whatever a provider
-# puts in a media path.
+# puts in a media path. The default is this file's parent's parent — fine in
+# the annotation tree, too broad on a laptop, where it is your home directory.
+# Name the one directory the videos are in instead. On Windows use forward
+# slashes: TOML reads `\` as an escape.
 media_roots = [".."]
+# media_roots = ["C:/Users/you/videos"]
 
 # plugin_paths = ["plugins", "/opt/quorum-plugins"]
 # plugins_enabled = ["grid_capture", "mask_layer", "identity", "proposals", "cvat_xml"]

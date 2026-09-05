@@ -35,15 +35,73 @@ already taken, what is not built, and the conventions to keep.
 
 ## Setup
 
+Python 3.11 or newer — the config reader is `tomllib`, which is 3.11.
+
 ```bash
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install fastapi "uvicorn[standard]"      # numpy comes from the system
 ./run.sh                                               # → http://127.0.0.1:8600
 ```
 
+`ffmpeg` and `ffprobe` must be on `PATH`. They are how every frame timestamp is
+read and every still is cut, so without them building a capture, preparing a
+video and the SAM interactor all refuse — with that reason, rather than
+mysteriously. Everything else still works.
+
 Copy `quorum.toml.example` to `quorum.toml` to change ports, auth or where
 plugins are looked for. To run it in a container instead — which is how it runs
 on the box with the GPU — see [In a container](#in-a-container).
+
+### On Windows
+
+The core is portable — sqlite, threads, stdlib paths — so the server itself
+runs unchanged. Three things about the Linux recipe above do not carry over,
+and all three are about the environment rather than the code:
+
+```powershell
+winget install Gyan.FFmpeg          # ffprobe/ffmpeg on PATH; reopen the shell
+py -3.11 -m venv .venv              # no --system-site-packages: see below
+.venv\Scripts\pip install -e .
+.\run.ps1                           # → http://127.0.0.1:8600
+```
+
+- **No `--system-site-packages`.** On the lab boxes numpy is inherited from the
+  system python, which is why the line above installs only fastapi and uvicorn.
+  There is no system numpy on Windows, so install the package itself — numpy is
+  already a dependency in `pyproject.toml` — and the venv is complete.
+- **`.venv\Scripts\python.exe`, not `.venv/bin/python`.** That is the whole
+  reason `run.ps1` and `dev.ps1` exist beside `run.sh` and `dev.sh`; they take
+  the same arguments (`.\run.ps1 --port 8611`, `.\dev.ps1 start|stop|restart|log`).
+- **ffmpeg is not there by default.** `winget install Gyan.FFmpeg`, or unpack a
+  build and put its `bin` on `PATH`. `run.ps1` warns if `ffprobe` is missing
+  rather than letting you find out at the first **Build**.
+
+Set `media_roots` explicitly in `quorum.toml` while you are there. The default
+is the clone's *parent* directory, which on a laptop is something like
+`C:\Users\you` — legal, but far more of the disk than this server needs to be
+able to read:
+
+```toml
+media_roots = ["C:/Users/you/videos"]     # forward slashes; TOML treats \ as an escape
+```
+
+**Segmenting on Windows.** The SAM *interactor* — click a person, get a mask —
+needs two things: `ffmpeg` locally, to cut the frame out of the video, and an
+HTTP endpoint that answers with a mask. It does not need docker or a GPU on
+this machine; only the auto-annotator does, because that one starts a container.
+So point it at a service that is already running:
+
+```toml
+[plugins.sam]
+url = "http://127.0.0.1:9000/"      # e.g. ssh -L 9000:localhost:<sam port> gpubox
+```
+
+`$SAM_URL` overrides that. The SAM panel says which of the three sizes work and
+why, so an unreachable endpoint reads as a sentence rather than as a dead key.
+One caveat that is architectural rather than incidental: `plugins/sam/client.py`
+posts the *frame* to the service — it was written for a server sitting beside
+the function on a docker network. Over a tunnel that is ~670 kB of JPEG per
+click, so expect the interactor to feel like the link, not like the GPU.
 
 ## Ten minutes, from a browser and nothing else
 
