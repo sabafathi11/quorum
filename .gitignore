@@ -17,3 +17,4 @@ plugins/sam/annotator/__pycache__/
 # is exactly what is meant to be in git.
 beefline_records/**/*.mp4
 beefline_records/**/.session.zip
+.dev.pid
