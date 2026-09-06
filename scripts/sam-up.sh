@@ -28,10 +28,23 @@ ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
 
 exists()  { docker inspect "$NAME" >/dev/null 2>&1; }
 running() { [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" = "true" ]; }
-answers() { curl -sf -m 8 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; }
+
+# The address it is published on, which is not always loopback. The compose
+# file publishes on one address — $SAM_BIND — so setting that to the tailnet,
+# which is what lets an annotator's laptop reach /health at all, takes the
+# loopback binding away. Probing 127.0.0.1 regardless then calls a perfectly
+# healthy service wedged, and under --watch restarts it every 30 s forever.
+# Ask docker where it actually is instead.
+addr() {
+  if [ -n "${SAM_HOST:-}" ]; then printf '%s' "$SAM_HOST"; return; fi
+  docker port "$NAME" 8080/tcp 2>/dev/null | head -1 | cut -d: -f1 | grep . \
+    || printf '127.0.0.1'
+}
+
+answers() { curl -sf -m 8 "http://$(addr):${PORT}/health" >/dev/null 2>&1; }
 
 health() {
-  curl -s -m 8 "http://127.0.0.1:${PORT}/health" 2>/dev/null | python3 -c '
+  curl -s -m 8 "http://$(addr):${PORT}/health" 2>/dev/null | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -60,7 +73,7 @@ wait_for() {
   local n=0
   printf '  loading the model'
   while [ "$n" -lt "$WAIT" ]; do
-    if answers; then printf '\n'; ok "$NAME is answering on 127.0.0.1:${PORT}."; return 0; fi
+    if answers; then printf '\n'; ok "$NAME is answering on $(addr):${PORT}."; return 0; fi
     running || { printf '\n'; bad "$NAME exited while starting:"; \
                  docker logs --tail 25 "$NAME" 2>&1 | sed 's/^/    /'; return 1; }
     printf '.'
@@ -84,7 +97,7 @@ bring_up() {
     wait_for || return 1
   elif running; then
     if answers; then
-      ok "$NAME is up and answering on 127.0.0.1:${PORT}."
+      ok "$NAME is up and answering on $(addr):${PORT}."
     else
       # Not answering is not the same as wedged: the model takes ~10 s to load
       # and this script is often run *because* somebody just started it. Give it

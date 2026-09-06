@@ -34,6 +34,19 @@ SAM_BIND=$(tailscale ip -4) \
 docker compose up -d
 ```
 
+`SAM_BIND` **moves** the published address, it does not add one — loopback is
+gone the moment you set it. So set `[plugins.sam] url` in `quorum.toml` to the
+same address, or this server, on this very box, gets connection-refused against
+a container that is up and healthy and answers their laptop fine:
+
+```toml
+[plugins.sam]
+url = "http://100.95.156.1:32950/"    # the address SAM_BIND published on
+```
+
+`docker port sam-service 8080` says where it actually is, and the two have to
+agree. Restart Quorum after changing this — the config is read at startup.
+
 **2. Bind Quorum to the tailnet and turn on tokens.** In `quorum.toml`:
 
 ```toml
@@ -255,6 +268,10 @@ Reload **http://127.0.0.1:8600**. The masks are now ordinary tracks.
 - **The SAM panel says the service is not answering.** Either `SAM_BIND` was not
   set on the box (Part 1.1) or their Tailscale is down. `curl.exe
   http://100.95.156.1:32950/health` is the one-line test.
+- **The SAM panel says that *on the server*, naming `127.0.0.1:32950`.** The
+  health check above passes and the server still cannot reach it: `SAM_BIND`
+  took the loopback binding away, and `[plugins.sam] url` was left on
+  `127.0.0.1`. Point it at the published address and restart Quorum. Part 1.1.
 - **A 403 on a video, right after a successful ingest.** The videos are outside
   `media_roots`. §2.4.
 - **Auto-annotate is missing or refuses on their machine.** Expected. It is the

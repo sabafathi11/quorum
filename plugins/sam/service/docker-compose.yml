@@ -48,11 +48,18 @@ services:
       # Loopback by default: Quorum reaches it by container name on the shared
       # network, and this is for looking at it by hand.
       #
-      # $SAM_BIND widens that to one more address — in practice the tailnet one,
-      # so an annotator running Quorum on their own laptop can use the
-      # interactor and the tracker, both of which post frames as bytes. Set it
-      # to a specific address, never 0.0.0.0: this service has no authentication
-      # of any kind, and this box also has a public address.
+      # $SAM_BIND moves that binding to another address — in practice the
+      # tailnet one, so an annotator running Quorum on their own laptop can use
+      # the interactor and the tracker, both of which post frames as bytes. Set
+      # it to a specific address, never 0.0.0.0: this service has no
+      # authentication of any kind, and this box also has a public address.
+      #
+      # It MOVES the binding, it does not add to it: there is one published
+      # address here, so setting SAM_BIND takes 127.0.0.1 away. Anything on the
+      # box that reaches the service by loopback then gets connection-refused
+      # against a container that is up and healthy — a Quorum whose
+      # [plugins.sam] url is http://127.0.0.1:32950/ reports "SAM is not ready".
+      # Whenever you set this, point that url at the same address.
       - "${SAM_BIND:-127.0.0.1}:${SAM_PORT:-32950}:8080"
     networks:
       - sam
