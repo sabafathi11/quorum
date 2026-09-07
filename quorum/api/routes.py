@@ -543,7 +543,17 @@ def layer_frames(lid: int, frame: int, request: Request, span: int = 0,
             if k in seen:
                 continue
             seen.add(k)
-            keys.append([r["object_id"], r["frame"], r["outside"], json.loads(r["payload"])])
+            # An `outside` keyframe says the object is not present here, and the
+            # renderer skips it without ever opening the payload. Sending the
+            # mask anyway is the bulk of this response and none of its meaning:
+            # every track still alive later in the video contributes its last
+            # known shape to every window it is absent from. On a capture with
+            # ~1800 long tracks that was 74% of ~4.9 MB, refetched on every
+            # structural edit, which is slow on a laptop and hopeless on a
+            # relayed link. The flag is what carries the information; the
+            # pixels are dead weight.
+            payload = None if r["outside"] else json.loads(r["payload"])
+            keys.append([r["object_id"], r["frame"], r["outside"], payload])
         out[st["key"]] = {"from": i0, "to": i1, "keys": keys}
     return {"layer": lid, "frame": frame, "span": span, "streams": out}
 
