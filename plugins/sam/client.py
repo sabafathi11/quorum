@@ -79,9 +79,15 @@ def shift(payload: dict | None, dx: int, dy: int) -> dict | None:
 class Sam:
     """One endpoint, two calls. Holds no state; safe to make per job."""
 
-    def __init__(self, url: str, timeout: float = 900.0):
+    def __init__(self, url: str, timeout: float = 900.0, probe_timeout: float = 3.0):
         self.url = (url or "").strip()
         self.timeout = float(timeout)
+        # Only the readiness probe uses this. It is short because a *down*
+        # endpoint costs it on every check and a dead workspace should say so
+        # quickly — but "short" is a LAN's opinion. A service reached across a
+        # relayed link needs two or three round trips before it has said
+        # anything at all, so this is settable rather than a constant.
+        self.probe_timeout = float(probe_timeout)
 
     # -- transport ---------------------------------------------------------
     def post(self, payload: dict, timeout: float | None = None) -> dict:
@@ -114,7 +120,7 @@ class Sam:
             raise SamError(str(out["error"])[:400])
         return out
 
-    def alive(self, timeout: float = 3.0) -> tuple[bool, str]:
+    def alive(self, timeout: float | None = None) -> tuple[bool, str]:
         """Is it there? Answers without asking it to segment anything.
 
         An empty POST is refused by the function — that refusal *is* the proof
@@ -124,7 +130,7 @@ class Sam:
         if not self.url:
             return False, "no endpoint configured"
         try:
-            self.post({}, timeout=timeout)
+            self.post({}, timeout=timeout or self.probe_timeout)
             return True, ""
         except SamError as e:
             msg = str(e)

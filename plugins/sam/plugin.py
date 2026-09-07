@@ -98,11 +98,22 @@ auto = _load("auto")
 # ----------------------------------------------------------------- settings
 def endpoint(plugin_or_ctx) -> "client.Sam":
     settings = getattr(plugin_or_ctx, "settings", None)
+
+    def setting(key, default):
+        if callable(settings):
+            return settings(key, default)
+        return (settings or {}).get(key, default)
+
     url = os.environ.get("SAM_URL") or ""
     if not url:
-        url = (settings("url", "") if callable(settings) else (settings or {}).get("url", "")) \
-            or DEFAULT_URL
-    return client.Sam(url)
+        url = setting("url", "") or DEFAULT_URL
+    # How long the readiness probe waits. The default suits a service on the
+    # same host; a laptop reaching this one across a relayed tailnet needs more
+    # than three seconds to complete a round trip, and without this the panel
+    # says "not answering" about a service that answers every real call fine —
+    # the probe is the only call in this file with a LAN-sized budget.
+    probe = os.environ.get("SAM_PROBE_TIMEOUT") or setting("probe_timeout", 3.0)
+    return client.Sam(url, probe_timeout=float(probe or 3.0))
 
 
 # ------------------------------------------------------------------ streams

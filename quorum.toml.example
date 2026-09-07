@@ -33,6 +33,14 @@ media_roots = [".."]
 # random host port on every deploy. $SAM_URL overrides this.
 # url = "http://nuclio-nuclio-pth-comfyorg-sam3-1-v2:8080/"
 #
+# How long the readiness probe waits before calling the service dead, in
+# seconds. Three suits a service on this host. Raise it when the service is
+# across a network — a laptop reaching a SAM on a relayed tailnet needs several
+# round trips to say hello, and the probe timing out is indistinguishable, in
+# the panel, from the service being down. The real calls are unaffected; they
+# already allow 120 s and 900 s. $SAM_PROBE_TIMEOUT overrides this.
+# probe_timeout = 15
+#
 # The image the auto-annotator starts. Quorum never pulls it.
 # image = "cvat.pth.comfyorg.sam3.1:latest-gpu"
 # gpus = "all"
