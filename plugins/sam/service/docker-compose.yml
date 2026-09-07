@@ -38,6 +38,14 @@ services:
       # ignored. Raising it costs VRAM on every request, not just the batch.
       SAM_MAX_OBJECTS: "${SAM_MAX_OBJECTS:-20}"
       SAM_ANNOTATOR: /annotator
+      # Without this the handler's own `traceback.print_exc()` sits in a block
+      # buffer and never reaches `docker logs`: stdout is a pipe here, not a
+      # tty. A 500 then reaches the annotator as one line of exception text
+      # with no stack behind it anywhere on the box, which is how a CUDA error
+      # from the tracker became unsearchable. The SAM3 library's own logging
+      # flushes on its own, so the logs *look* complete right up until the
+      # moment something fails.
+      PYTHONUNBUFFERED: "1"
     volumes:
       - "${ANNOTATOR:-../annotator}:/annotator:ro"
       # The videos, and Quorum's data directory, at the paths Quorum knows them

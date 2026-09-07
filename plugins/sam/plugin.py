@@ -370,9 +370,12 @@ def _seed(host, capture_id: int, stream: str, key: str, stream_frame: int):
             "backward": {"type": "boolean", "default": False,
                          "label": "Go backwards from the seed instead"},
             "roi": {"type": "boolean", "default": True,
-                    "label": "Crop around the object first",
-                    "description": "SAM rescales its input to a fixed square, so a small "
-                                   "person arrives tiny unless the frame is cropped to them."}},
+                    "label": "Crop around the object first (not yet applied here)",
+                    "description": "Accepted and ignored: propagation sends whole frames. "
+                                   "The interactor crops, and for one frame that is right — "
+                                   "but a crop fixed on the seed box loses a person who walks "
+                                   "out of it, and a run is 60 frames long. Until the crop "
+                                   "follows the mask, this switch does nothing."}},
     description="Carry one mask across the next frames of its own camera. The keyframes it "
                 "writes are one op, attributed to you, and Ctrl+Z takes all of them back.")
 def track(ctx):
@@ -401,6 +404,13 @@ def track(ctx):
         raise ValueError(f"there are no frames {'before' if step < 0 else 'after'} {start} "
                          f"in {skey} to carry it to")
 
+    # Whole frames, deliberately, and `roi` above says so rather than pretending.
+    # A tracked object moves; `frames.roi_for` pads the seed box by 1.6 and caps
+    # the crop at 45% of the frame, which is sized for one prompt on one frame,
+    # not for 60. Cropping to that and then losing the person at frame 20 is
+    # worse than sending pixels. The cost of not cropping is real, though, and
+    # it lands on a shared GPU: 61 frames of 1920x1080 rather than 61 crops.
+    # The fix is a crop that follows the mask between chunks, not this flag.
     ctx.progress(0.05, f"reading {len(want)} frames of {skey}")
     times = frames.times_of(stamps, want)
     jpegs = frames.many(src, times, check=ctx.check)
