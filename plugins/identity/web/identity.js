@@ -36,6 +36,9 @@ export default {
     // A direction/filter-specific batch of nearby problem runs.  Navigation
     // never asks the server to count every problem in the capture.
     const problemCache = new Map();
+    let problemEpoch = 0;
+    let problemPrefetchTimer = null;
+    const problemId = (p) => `${p.frame}|${p.kind}|${p.cid ?? ''}|${(p.objects || []).join(',')}`;
 
     const recount = () => {
       const cids = [...new Set(Object.values(S.assignments)
@@ -74,6 +77,7 @@ export default {
       const items = (payload?.items || []).map(([s, k]) => [String(s), String(k)]);
       const outside = kind === 'identity.outside'
         || (kind === 'identity.assign' && Number(payload?.cid) === OUTSIDE);
+      problemEpoch++;
       if (outside) updateOutsideProblems(items);
       else problemCache.clear();
       if (kind === 'identity.clear') {
@@ -108,7 +112,9 @@ export default {
       if (!cap) return;
       const st = await ctx.call(`/${cap.id}/state`);
       Object.assign(S, st, { loaded: true });
+      problemEpoch++;
       problemCache.clear();
+      if (ctx.store.get('tool') === 'identity') scheduleProblemPrefetch();
       app().renderInspector();
       ctx.invalidate();
     };
@@ -116,6 +122,43 @@ export default {
     const scheduleLoad = (delay = 150) => {
       clearTimeout(loadTimer);
       loadTimer = setTimeout(() => { loadTimer = null; load(); }, delay);
+    };
+
+    // After a confirmed edit, warm the normal forward walk while the annotator
+    // is deciding what to do next. The short debounce turns several edits into
+    // one bounded scan and never asks the server for a total.
+    const scheduleProblemPrefetch = (delay = 200) => {
+      clearTimeout(problemPrefetchTimer);
+      const epoch = problemEpoch;
+      problemPrefetchTimer = setTimeout(async () => {
+        const cap = ctx.store.get('capture');
+        if (!cap || !maskLayer() || ctx.store.get('tool') !== 'identity' || epoch !== problemEpoch) return;
+        const f = ctx.display.query || '';
+        const cacheKey = `${cap.id}|${f}|next`;
+        const from = ctx.store.get('frame') + 1;
+        let batch = problemCache.get(cacheKey);
+        if (batch?.pending) return;
+        if (batch) batch.problems = batch.problems.filter((p) => p.frame >= from);
+        if (batch?.problems.length >= 4) return;
+        if (!batch) {
+          batch = { problems: [], pending: null };
+          problemCache.set(cacheKey, batch);
+        }
+        const edge = batch.problems.length ? batch.problems[batch.problems.length - 1].frame : from;
+        const start = batch.problems.length ? edge + 1 : edge;
+        const need = Math.max(1, 4 - batch.problems.length);
+        batch.pending = ctx.call(`/${cap.id}/problems?frame=${start}&direction=1&limit=${need}`
+          + (f ? `&${f}` : ''))
+          .then((r) => {
+            if (epoch !== problemEpoch || problemCache.get(cacheKey) !== batch) return;
+            const seen = new Set(batch.problems.map(problemId));
+            for (const next of r.problems || []) {
+              if (!seen.has(problemId(next))) { batch.problems.push(next); seen.add(problemId(next)); }
+            }
+          })
+          .catch(() => {}) // a later Next click retries; a background failure is not an edit failure
+          .finally(() => { batch.pending = null; });
+      }, delay);
     };
 
     const submit = (kind, payload) => {
@@ -134,6 +177,7 @@ export default {
           // brand-new local link is reconciled after its instant optimistic
           // paint.  This is debounced and never holds up the edit itself.
           if (op.kind === 'identity.link') scheduleLoad(500);
+          scheduleProblemPrefetch();
           return op;
         })
         .catch(() => {
@@ -152,6 +196,7 @@ export default {
         S.localOps.delete(op.id);  // the WebSocket echo of our own confirmed op
         return;
       }
+      problemEpoch++;
       problemCache.clear();
       scheduleLoad();
     });
@@ -395,7 +440,6 @@ export default {
     // with no identity, or one identity on two masks in one camera — select the
     // offender and ring it. `N` is kept as an alias.
     let walking = false;
-    const problemId = (p) => `${p.frame}|${p.kind}|${p.cid ?? ''}|${(p.objects || []).join(',')}`;
     const walk = async (direction = 1) => {
       const A = app();
       const cap = ctx.store.get('capture');
