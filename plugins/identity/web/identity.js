@@ -18,7 +18,7 @@ export default {
     const app = () => window.quorum;
     const S = { assignments: {}, cids: [], nextCid: 1, counts: {}, loaded: false,
                 scope: localStorage.getItem('quorum.identity.scope') || 'identity',
-                problems: 0 };
+                problems: 0, localOps: new Set() };
 
     const cidOf = (entry) => {
       const m = S.assignments[entry.stream.key];
@@ -31,14 +31,129 @@ export default {
     // ------------------------------------------------------------- state
     const maskLayer = () => (ctx.store.get('capture')?.layers || []).find((l) => l.type === 'mask.rle');
 
+    let pendingWrites = 0;
+    let loadTimer = null;
+    let problemTimer = null;
+    let problemCache = null;
+
+    const recount = () => {
+      const cids = [...new Set(Object.values(S.assignments)
+        .flatMap((m) => Object.values(m))
+        .filter((c) => c !== OUTSIDE))].sort((a, b) => a - b);
+      S.cids = cids;
+      S.nextCid = cids.length ? Math.max(...cids) + 1 : 1;
+      S.counts = {};
+      for (const m of Object.values(S.assignments)) {
+        for (const c of Object.values(m)) S.counts[c] = (S.counts[c] || 0) + 1;
+      }
+    };
+
+    const updateOutsideProblems = (items) => {
+      if (!problemCache) return;
+      const ids = new Set(items.map(([stream, key]) => app().findObject(stream, key)?.id)
+        .filter((id) => id != null));
+      if (!ids.size) return;
+      problemCache.problems = problemCache.problems.flatMap((p) => {
+        const objects = (p.objects || []).filter((id) => !ids.has(id));
+        if (p.kind === 'duplicate') {
+          if (objects.length < 2) return [];
+          return [{ ...p, objects,
+            why: `id ${p.cid} is on ${objects.length} masks in ${p.stream}` }];
+        }
+        return objects.length ? [{ ...p, objects }] : [];
+      });
+      problemCache.total = problemCache.problems.length;
+      S.problems = problemCache.total;
+      app().renderInspector();
+    };
+
+    // Identity folding is deliberately small and deterministic.  Keep the
+    // visible assignment map responsive while the durable op is travelling to
+    // the server; the next remote edit or an explicit reload reconciles it.
+    const applyLocal = (kind, payload) => {
+      const items = (payload?.items || []).map(([s, k]) => [String(s), String(k)]);
+      const outside = kind === 'identity.outside'
+        || (kind === 'identity.assign' && Number(payload?.cid) === OUTSIDE);
+      if (outside) updateOutsideProblems(items);
+      else problemCache = null;
+      if (kind === 'identity.clear') {
+        for (const [s, k] of items) delete (S.assignments[s] || {})[k];
+      } else if (kind === 'identity.assign') {
+        const cid = Number(payload.cid);
+        for (const [s, k] of items) (S.assignments[s] ||= {})[k] = cid;
+      } else if (kind === 'identity.outside') {
+        for (const [s, k] of items) (S.assignments[s] ||= {})[k] = OUTSIDE;
+      } else if (kind === 'identity.link') {
+        const now = items.map(([s, k]) => S.assignments[s]?.[k]);
+        const have = [...new Set(now.filter((c) => c != null && c !== OUTSIDE))]
+          .sort((a, b) => a - b);
+        const cid = have.length ? have[0]
+          : (now.length && now.every((c) => c === OUTSIDE) ? OUTSIDE : S.nextCid);
+        const merge = new Set(have);
+        for (const m of Object.values(S.assignments)) {
+          for (const k of Object.keys(m)) if (merge.has(m[k])) m[k] = cid;
+        }
+        for (const [s, k] of items) (S.assignments[s] ||= {})[k] = cid;
+      }
+      S.assignments = Object.fromEntries(
+        Object.entries(S.assignments).filter(([, m]) => Object.keys(m).length));
+      recount();
+      app().renderInspector();
+      ctx.invalidate();
+    };
+
+    const scheduleProblems = (delay = 250) => {
+      clearTimeout(problemTimer);
+      problemTimer = setTimeout(() => { problemTimer = null; countProblems(); }, delay);
+    };
+
     const load = async () => {
+      if (pendingWrites) return scheduleLoad(250);
       const cap = ctx.store.get('capture');
       if (!cap) return;
       const st = await ctx.call(`/${cap.id}/state`);
       Object.assign(S, st, { loaded: true });
+      problemCache = null;
       app().renderInspector();
       ctx.invalidate();
-      countProblems();
+      scheduleProblems();
+    };
+
+    const scheduleLoad = (delay = 150) => {
+      clearTimeout(loadTimer);
+      loadTimer = setTimeout(() => { loadTimer = null; load(); }, delay);
+    };
+
+    const submit = (kind, payload) => {
+      pendingWrites += 1;
+      applyLocal(kind, payload);
+      return app().postOp(kind, payload, { source: 'local' })
+        .then((op) => {
+          S.localOps.add(op.id);
+          setTimeout(() => S.localOps.delete(op.id), 30000);
+          const outside = op.kind === 'identity.outside'
+            || (op.kind === 'identity.assign' && Number(op.payload?.cid) === OUTSIDE);
+          if (outside && problemCache) {
+            S.problems = problemCache.total;
+            app().renderInspector();
+          } else {
+            scheduleProblems(50);
+          }
+          // `identity.link` allocates on the server from every identity that
+          // has ever existed, including one later cleared.  The compact state
+          // endpoint intentionally does not carry that historical set, so a
+          // brand-new local link is reconciled after its instant optimistic
+          // paint.  This is debounced and never holds up the edit itself.
+          if (op.kind === 'identity.link') scheduleLoad(500);
+          return op;
+        })
+        .catch(() => {
+          // The optimistic value is not durable if the write failed.  Re-read
+          // the authoritative state; the normal API error handler reports why.
+          load();
+          return null;
+        })
+        .finally(() => { pendingWrites = Math.max(0, pendingWrites - 1); });
     };
     const countProblems = async () => {
       const cap = ctx.store.get('capture');
@@ -52,7 +167,16 @@ export default {
       } catch { /* the counter is a nicety, never a blocker */ }
     };
     ctx.on('capture', load);
-    ctx.onOp((op) => { if (op.kind.startsWith('identity.') || op.kind.startsWith('masks.')) load(); });
+    ctx.onOp((op) => {
+      if (!op.kind?.startsWith('identity.') && !op.kind?.startsWith('masks.')) return;
+      if (op._source === 'local' && op.kind.startsWith('identity.')) return;
+      if (op._source === 'remote' && S.localOps.has(op.id)) {
+        S.localOps.delete(op.id);  // the WebSocket echo of our own confirmed op
+        return;
+      }
+      problemCache = null;
+      scheduleLoad();
+    });
     if (ctx.store.get('capture')) load();
 
     // ------------------------------------------------------------- colour
@@ -136,7 +260,7 @@ export default {
       items.push({ label: '— select whole identity', hint: topCid == null ? '—' : `id ${topCid}`,
                    onclick: () => topCid != null && A.select(membersOf(topCid), 'set') });
       items.push({ label: '— clear identity from this track', hint: 'C',
-                   onclick: () => A.postOp('identity.clear',
+                   onclick: () => submit('identity.clear',
                      { items: [[top.stream.key, top.object.key]] }) });
       ctx.ui.menu(event.clientX, event.clientY, items,
                   { title: stack.length > 1 ? `${stack.length} masks here` : 'mask' });
@@ -224,14 +348,14 @@ export default {
         'Ctrl+click selects a single track if that is what you meant.', verb);
     };
 
-    const link = () => { const i = need(); if (i) app().postOp('identity.link', { items: i }); };
+    const link = () => { const i = need(); if (i) submit('identity.link', { items: i }); };
     const clear = async () => {
       const i = need();
-      if (i && await guarded('Clear', i)) app().postOp('identity.clear', { items: i });
+      if (i && await guarded('Clear', i)) submit('identity.clear', { items: i });
     };
     const outside = async () => {
       const i = need();
-      if (i && await guarded('Flag outside', i)) app().postOp('identity.outside', { items: i });
+      if (i && await guarded('Flag outside', i)) submit('identity.outside', { items: i });
     };
     const assignTo = async () => {
       const items = need();
@@ -245,7 +369,7 @@ export default {
       });
       if (!ok) return;
       const cid = parseInt(input.value, 10);
-      if (Number.isFinite(cid)) app().postOp('identity.assign', { items, cid });
+      if (Number.isFinite(cid)) submit('identity.assign', { items, cid });
     };
 
     const setScope = (v) => {
@@ -276,12 +400,29 @@ export default {
         // hidden class rather than offering it and being refused. The refusal
         // still exists — `reveal` below is door 4 — but a walk that lands on a
         // frame and then declines to point at anything reads as a bug.
-        const f = ctx.display.query;
-        const r = await ctx.call(
-          `/${cap.id}/problems?frame=${Math.max(0, from)}&direction=${direction}&limit=1` +
-          (f ? `&${f}` : ''));
-        const p = r.problems?.[0];
-        S.problems = r.total ?? S.problems;
+        const f = ctx.display.query || '';
+        const cacheKey = `${cap.id}|${f}`;
+        if (!problemCache || problemCache.key !== cacheKey) {
+          // The server's scan already computes every problem run before it
+          // returns the first one. Fetch that result once, then make Next /
+          // Previous a local lookup instead of rescanning the capture every
+          // time the annotator presses the button.
+          const r = await ctx.call(
+            `/${cap.id}/problems?frame=0&direction=1&limit=100000` +
+            (f ? `&${f}` : ''));
+          problemCache = { key: cacheKey, problems: r.problems || [], total: r.total ?? 0 };
+        }
+        const problems = problemCache.problems;
+        let p = null;
+        if (direction >= 0) {
+          p = problems.find((x) => x.frame >= from) || null;
+        } else {
+          for (const x of problems) {
+            if (x.frame > from) break;
+            p = x;
+          }
+        }
+        S.problems = problemCache.total;
         if (!p) {
           ctx.toast('Nothing left', direction >= 0
             ? 'No unset track and no repeated identity after this frame.'

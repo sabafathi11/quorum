@@ -243,7 +243,10 @@ class App {
     await this.ensureData(0);
 
     this.socket = new Socket(this.api, id, {
-      op: (m) => { this.bus.emit('op', m.op); },
+      // Mark socket deliveries so a plugin can distinguish a confirmed local
+      // edit from a genuinely remote one.  The server still sends the same op
+      // to every client; this bit is only local browser metadata.
+      op: (m) => { this.bus.emit('op', { ...m.op, _source: 'remote' }); },
       presence: (m) => this.store.set({ presence: m.users }),
       job: (m) => this.onJob(m.job),
       // Somebody else changed a clock, uploaded a file, or built a rendition.
@@ -558,10 +561,13 @@ class App {
   }
 
   // ------------------------------------------------------------------- ops
-  async postOp(kind, payload) {
+  async postOp(kind, payload, { source = null } = {}) {
     const cap = this.store.get('capture');
     const { op } = await this.api.postOp(cap.id, { kind, payload });
-    this.bus.emit('op', op);        // apply locally; the socket echo is idempotent
+    // Keep one event shape for local and socket edits, while making the origin
+    // explicit to browser-side optimistic views.  Nothing extra is sent to the
+    // server and the persisted op is unchanged.
+    this.bus.emit('op', source ? { ...op, _source: source } : op);
     return op;
   }
 
