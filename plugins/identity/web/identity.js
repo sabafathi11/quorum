@@ -395,6 +395,7 @@ export default {
     // with no identity, or one identity on two masks in one camera — select the
     // offender and ring it. `N` is kept as an alias.
     let walking = false;
+    const problemId = (p) => `${p.frame}|${p.kind}|${p.cid ?? ''}|${(p.objects || []).join(',')}`;
     const walk = async (direction = 1) => {
       const A = app();
       const cap = ctx.store.get('capture');
@@ -413,13 +414,19 @@ export default {
         const cacheKey = `${cap.id}|${f}|${direction >= 0 ? 'next' : 'prev'}`;
         let batch = problemCache.get(cacheKey);
         let p = batch?.problems.find((x) => direction >= 0 ? x.frame >= from : x.frame <= from);
+        if (!p && batch?.pending) {
+          // A background refill may already be carrying the next runs. Prefer
+          // it to starting an overlapping scan when the user walks quickly.
+          await batch.pending;
+          p = batch.problems.find((x) => direction >= 0 ? x.frame >= from : x.frame <= from);
+        }
         if (!p) {
           // Fetch only a few nearest runs.  The server stops the forward scan
           // as soon as this batch is full; later clicks consume it locally.
           const r = await ctx.call(
             `/${cap.id}/problems?frame=${Math.max(0, from)}&direction=${direction}&limit=4` +
             (f ? `&${f}` : ''));
-          batch = { problems: r.problems || [] };
+          batch = { problems: r.problems || [], pending: null };
           problemCache.set(cacheKey, batch);
           p = batch.problems[0] || null;
         }
@@ -439,6 +446,27 @@ export default {
         }
         ctx.toast(p.kind === 'duplicate' ? 'Impossible identity' : 'No identity yet', p.why,
                   p.kind === 'duplicate' ? 'warn' : '');
+        // The problem just visited can never be the next destination. Keep
+        // only future runs, then refill below four in the background. This
+        // leaves the following clicks instant while one small request carries
+        // enough more runs to replenish the queue.
+        batch.problems = batch.problems.filter((x) => direction >= 0 ? x.frame > p.frame : x.frame < p.frame);
+        if (batch.problems.length < 4 && !batch.pending) {
+          const edge = batch.problems.length
+            ? batch.problems[batch.problems.length - 1].frame
+            : p.frame;
+          const start = Math.max(0, edge + (direction >= 0 ? 1 : -1));
+          batch.pending = ctx.call(
+            `/${cap.id}/problems?frame=${start}&direction=${direction}&limit=4` + (f ? `&${f}` : ''))
+            .then((r) => {
+              const seen = new Set(batch.problems.map(problemId));
+              for (const next of r.problems || []) {
+                if (!seen.has(problemId(next))) { batch.problems.push(next); seen.add(problemId(next)); }
+              }
+            })
+            .catch(() => {}) // the current problem was shown; a later click retries the refill
+            .finally(() => { batch.pending = null; });
+        }
         app().renderInspector();
       } finally { walking = false; }
     };
