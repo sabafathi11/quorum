@@ -1014,7 +1014,7 @@ await step('an edit and its undo leave the app consistent', async () => {
 
 await invariantStep('after an edit and undo');
 
-await step('a SAM prompt point is taken back by clicking it again', async () => {
+await step('SAM batches prompt dots until explicitly sent', async () => {
   // The points are the prompt. Stacking a second one where you already put
   // one is never what somebody means, and without this the only way to undo a
   // misplaced negative is to throw the whole prompt away and start again.
@@ -1025,8 +1025,9 @@ await step('a SAM prompt point is taken back by clicking it again', async () => 
   const prev = app.store.get('tool');
   app.activateTool('sam');
 
-  // Asking the model is the observable side effect of a point being added, so
-  // counting those calls says whether the second click added or removed one.
+  // Asking the model must be an explicit action. Counting these calls proves
+  // dots stay local until Ctrl+Enter, and that removing one does not start a
+  // second expensive inference.
   const real = globalThis.fetch;
   let asked = 0;
   globalThis.fetch = (url, opt) => {
@@ -1040,15 +1041,16 @@ await step('a SAM prompt point is taken back by clicking it again', async () => 
   try {
     click();
     await wait(250);
-    const afterFirst = asked;
-    if (!afterFirst) throw new Error('the first click never asked the model for a mask');
-    click();                       // the very same point
+    if (asked) throw new Error(`one prompt dot made ${asked} model request(s) before Send prompts`);
+    window.dispatchEvent(new window.KeyboardEvent('keydown',
+      { key: 'Enter', ctrlKey: true, bubbles: true }));
     await wait(250);
-    if (asked !== afterFirst) {
-      throw new Error(`clicking the same point again asked the model ${asked - afterFirst} ` +
-                      'more time(s) — it stacked a second point instead of removing the first');
-    }
-    console.log(`       one click asked the model ${afterFirst}x, clicking it again asked 0 more`);
+    if (!asked) throw new Error('Ctrl+Enter did not send the prompt to SAM');
+    const afterSend = asked;
+    click();                       // the very same point removes it
+    await wait(250);
+    if (asked !== afterSend) throw new Error('removing a prompt dot made another model request');
+    console.log(`       dots sent 0 request(s) before Ctrl+Enter, then ${afterSend} request(s)`);
   } finally {
     globalThis.fetch = real;
     if (prev) app.activateTool(prev);

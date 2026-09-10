@@ -556,7 +556,9 @@ def post_edit(capture_id: int, request: Request, body: dict = Body(...),
                     409, f"{k} is already joined to {join_key(g)}; joining these would "
                          "merge two groups — unjoin one of them if that is what you mean")
 
-    op = host.append_op(capture_id, kind, payload, user["name"], body.get("layer_id"))
+    client_ref = str(body.get("client_ref") or "")
+    op = host.append_op(capture_id, kind, payload, user["name"], body.get("layer_id"),
+                        {"client_ref": client_ref} if client_ref else None)
     result = {}
     if verb in ("split", "join", "unjoin", "unsplit", "keyframe", "keyframes", "create",
                 "purge", "unpurge"):

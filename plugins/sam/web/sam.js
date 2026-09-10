@@ -4,8 +4,8 @@
 // because they cost wildly different amounts and only one of them is free to
 // get wrong:
 //
-//   Prompt      clicks accumulate into a preview. Nothing is written. You can
-//               keep clicking until it looks right, and Esc costs nothing.
+//   Prompt      clicks accumulate locally. Send them when ready to ask SAM
+//               for a preview; nothing is written until a later commit.
 //   Commit      the preview becomes a mask edit — through `masks`, as you, on
 //               one track — which means Ctrl+Z and the History panel work on
 //               it exactly like a cut or a join.
@@ -63,6 +63,7 @@ export default {
       status: null,
       runs: null,
       autoDefaults: {},
+      request: 0,            // invalidates an old response after prompt changes
     };
 
     const capture = () => ctx.store.get('capture');
@@ -126,12 +127,22 @@ export default {
 
     // ------------------------------------------------------------- prompting
     const reset = (quiet = false) => {
+      S.request++;
       S.pos = []; S.neg = []; S.preview = null; S.roi = null; S.timing = null;
       S.stream = null; S.streamFrame = null; S.captureFrame = null;
       baked = null;
       ctx.invalidate();
       app().renderInspector();
       if (!quiet) ctx.toast('Prompt cleared', 'Nothing was written.');
+    };
+
+    // Points and segmentation settings are one prompt. Once either changes,
+    // a preview made from the previous prompt must not look committable.
+    const promptChanged = () => {
+      S.request++;
+      S.preview = null; S.roi = null; S.timing = null; baked = null;
+      ctx.invalidate();
+      app().renderInspector();
     };
 
     // A prompt is tied to the frame it was made on. Stepping away from that
@@ -148,8 +159,12 @@ export default {
 
     const segment = async () => {
       if (!S.pos.length) { S.preview = null; ctx.invalidate(); return; }
+      if (S.busy) return;
       const cap = capture();
       const t = target();
+      const request = ++S.request;
+      const pos = S.pos.map(([x, y]) => [x, y]);
+      const neg = S.neg.map(([x, y]) => [x, y]);
       let bbox = null;
       if (S.useBox && t) {
         const e = ctx.entriesAt(ctx.store.get('frame'))
@@ -165,8 +180,9 @@ export default {
         const r = await ctx.call(`/${cap.id}/interact`, {
           method: 'POST', quiet: true,
           body: { stream: S.stream, frame: S.captureFrame, stream_frame: S.streamFrame,
-                  pos: S.pos, neg: S.neg, bbox, roi: S.useRoi },
+                  pos, neg, bbox, roi: S.useRoi },
         });
+        if (request !== S.request) return;
         S.preview = r.payload;
         S.roi = r.roi;
         S.timing = r.ms;
@@ -177,6 +193,7 @@ export default {
                     + 'turn the crop off if the thing you want is large.', 'warn');
         }
       } catch (e) {
+        if (request !== S.request) return;
         S.preview = null;
         ctx.toast('SAM could not segment that', e.message || String(e), 'err');
       } finally {
@@ -217,13 +234,7 @@ export default {
       const found = pointUnder(world, cell);
       if (found) {
         found.list.splice(found.i, 1);
-        if (S.pos.length) {
-          segment();
-        } else {
-          S.preview = null; S.roi = null; baked = null;
-          ctx.invalidate();
-          A.renderInspector();
-        }
+        promptChanged();
         return true;
       }
 
@@ -232,7 +243,7 @@ export default {
       S.streamFrame = streamFrameNow(cell.stream);
       const p = toStream(world, cell);
       (right || event.shiftKey ? S.neg : S.pos).push(p);
-      segment();
+      promptChanged();
       return true;
     });
 
@@ -250,8 +261,15 @@ export default {
       const stream = S.stream;
       const frame = S.streamFrame;
       const payload = { ...S.preview, outside: 0 };
+      // The server echoes every op through the WebSocket.  Mark this request
+      // before sending it so the masks workspace recognises that echo even if
+      // it arrives before the HTTP response, rather than materialising and
+      // reloading the just-saved track a second time.
+      const clientRef = globalThis.crypto?.randomUUID?.()
+        || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      ctx.emit('masks.local-ref', clientRef);
       const post = (kind, body) => ctx.api.plugin('masks', `/${cap.id}/op`,
-                                                  { method: 'POST', body: { kind, payload: body },
+                                                  { method: 'POST', body: { kind, payload: body, client_ref: clientRef },
                                                     quiet: true });
       try {
         let key = t?.key;
@@ -276,6 +294,7 @@ export default {
         const made = app().findObject(stream, key);
         if (made) { app().select([made.id], 'set'); app().pulse([made.id], { ms: 1200 }); }
       } catch (e) {
+        ctx.emit('masks.cancel-local-ref', clientRef);
         if (e.status === 409) ctx.toast('That edit cannot apply', e.message, 'warn');
         else ctx.toast('Could not write the mask', e.message || String(e), 'err');
       }
@@ -365,19 +384,19 @@ export default {
     // accepts what is on screen, the other throws it away, and neither ever
     // means anything else here.
     for (const [id, title, keys, run] of [
+      ['preview', 'Send prompt dots to SAM and update the preview', ['Ctrl+Enter'], segment],
       ['commit', 'Write the previewed mask', ['Enter'], commit],
       ['clear', 'Throw the prompt away', ['Esc'], () => reset()],
       ['undo-point', 'Take back the last point', ['Backspace'], () => {
         if (S.neg.length > S.pos.length) S.neg.pop(); else S.pos.pop();
-        if (!S.pos.length) { S.preview = null; ctx.invalidate(); app().renderInspector(); }
-        else segment();
+        promptChanged();
       }],
       ['propagate', 'Carry the selected mask forward', ['R'], () => propagate(false)],
       ['propagate-back', 'Carry the selected mask backward', ['Shift+R'], () => propagate(true)],
       ['roi', 'Crop to the object before segmenting', ['C'], () => {
         S.useRoi = !S.useRoi;
         ctx.toast('Crop', S.useRoi ? 'on — small objects arrive full size' : 'off — SAM sees the whole frame');
-        if (S.pos.length) segment(); else app().renderInspector();
+        promptChanged();
       }],
     ]) ctx.registerCommand({ id, title, keys, tool: 'sam', group: 'SAM', run });
 
@@ -471,7 +490,9 @@ export default {
           ctx.ui.stat('target', t ? `${t.stream}/${t.key}` : 'new track'),
           ctx.ui.stat('crop', S.roi ? `${S.roi[2]}px` : S.useRoi ? 'auto' : 'off')),
         h('div', { class: 'row wrap' },
-          h('button', { class: 'btn sm primary', onclick: commit, disabled: !S.preview },
+          h('button', { class: 'btn sm primary', onclick: segment, disabled: !S.pos.length || S.busy },
+            S.busy ? 'Sending prompts...' : 'Send prompts', h('kbd', {}, 'Ctrl+Enter')),
+          h('button', { class: 'btn sm primary', onclick: commit, disabled: !S.preview || S.busy },
             t ? 'Replace this mask' : 'Create a track', h('kbd', {}, '⏎')),
           h('button', { class: 'btn sm', onclick: () => reset() }, 'Clear', h('kbd', {}, 'Esc'))),
         t ? null : h('div', { class: 'field' }, h('label', {}, 'Label for the new track'),
@@ -482,13 +503,13 @@ export default {
           })()),
         h('div', { class: 'row' },
           h('button', { class: `chipbtn${S.useRoi ? ' on' : ''}`, onclick: () => {
-            S.useRoi = !S.useRoi; if (S.pos.length) segment(); else A.renderInspector();
+            S.useRoi = !S.useRoi; promptChanged();
           } }, 'crop to object'),
           h('button', { class: `chipbtn${S.useBox ? ' on' : ''}`, onclick: () => {
-            S.useBox = !S.useBox; if (S.pos.length) segment(); else A.renderInspector();
+            S.useBox = !S.useBox; promptChanged();
           } }, 'use track box')),
         h('div', { class: 'hint' },
-          'Nothing is written until you commit. A committed mask is a `masks` edit like any '
+          'Dots stay in this browser until Send prompts (Ctrl+Enter). Nothing is written until you commit. A committed mask is a `masks` edit like any '
           + 'other — it is yours, it is in History, and Ctrl+Z takes it back.'),
       ], { id: 'sam-prompt' });
 

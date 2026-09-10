@@ -186,11 +186,18 @@ class Host:
 
     # -- ops -----------------------------------------------------------------
     def append_op(self, capture_id: int, kind: str, payload: dict,
-                  actor: str, layer_id: int | None = None) -> dict:
+                  actor: str, layer_id: int | None = None,
+                  transient: dict | None = None) -> dict:
         oid = self.db.insert("ops", capture_id=capture_id, layer_id=layer_id, actor=actor,
                              ts=now(), kind=kind, payload=json.dumps(payload))
         op = {"id": oid, "capture_id": capture_id, "layer_id": layer_id, "actor": actor,
               "ts": now(), "kind": kind, "payload": payload, "undone": 0}
+        # A caller may attach delivery-only information (for example, the
+        # browser request that originated an edit).  It is deliberately not
+        # stored in the op log: other clients need it only to recognise the
+        # initial WebSocket echo, never to replay history.
+        if transient:
+            op.update(transient)
         self.publish(capture_id, {"t": "op", "op": op})
         return op
 

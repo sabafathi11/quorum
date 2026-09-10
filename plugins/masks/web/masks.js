@@ -16,9 +16,15 @@ export default {
       deleted: {}, purged: {}, splits: {}, joins: {}, shadow: {}, edited: {}, created: {},
       sourceLayer: null, derivedLayer: null,
       showDeleted: true,
-      loaded: false, busy: false, localOps: new Set(),
+      loaded: false, busy: false, localOps: new Set(), localRefs: new Set(),
     };
     const setOf = (m, s) => new Set(m[s] || []);
+
+    // A tool that writes through the masks endpoint can reserve its request
+    // token before the request leaves the browser. WebSocket delivery is not
+    // ordered against the HTTP response, so this also covers an early echo.
+    ctx.on('masks.local-ref', (ref) => { if (ref) S.localRefs.add(ref); });
+    ctx.on('masks.cancel-local-ref', (ref) => S.localRefs.delete(ref));
 
     // ------------------------------------------------------------- state
     const load = async () => {
@@ -46,8 +52,9 @@ export default {
       // local delivery has already been materialised by `/masks/.../op`; keep
       // its id until the WebSocket echo arrives so that echo does not rebuild
       // the layer a second time.
-      if (op._source === 'remote' && S.localOps.has(op.id)) {
+      if (op._source === 'remote' && (S.localOps.has(op.id) || S.localRefs.has(op.client_ref))) {
         S.localOps.delete(op.id);
+        S.localRefs.delete(op.client_ref);
         return;
       }
       const mine = (op._source === 'local' || S.localOps.has(op.id)) && !op.undone;
