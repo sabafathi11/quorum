@@ -258,8 +258,9 @@ def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
     from the imported layer or from the derived one, and superseded keys are
     dropped so a joined track does not report its own ingredients as unset.
 
-    `limit` > 1 returns a list, which is what the inspector's problem counter
-    uses; the walk itself only ever wants the first one.
+    `limit` is a small navigation batch.  This deliberately does *not* count
+    all problems: the annotator needs the next few places to visit, not a
+    number that makes every click scan the rest of a long capture.
 
     `filter` is the client's object filter, verbatim. This endpoint *offers an
     object to a human*, so it has to honour it: a class the user has hidden
@@ -318,7 +319,8 @@ def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
     marks = sorted(set(starts) | set(ends))
 
     live: dict[int, tuple] = {}                 # object id -> event
-    runs: list[dict] = []                       # one entry per contiguous problem run
+    found: list[dict] = []                      # the nearby navigation batch
+    take = max(1, min(int(limit), 16))          # never turn navigation into a full scan
     prev_sig = None
     for m in marks:
         if m >= n_frames:
@@ -355,15 +357,17 @@ def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
         # frame where some other track happens to start.
         sig = (p["kind"], p.get("cid"), tuple(p["objects"]))
         if sig != prev_sig:
-            runs.append(p)
+            if (direction >= 0 and m >= frame) or (direction < 0 and m <= frame):
+                found.append(p)
+                # The normal Next path is a forward walk.  Once its small
+                # batch is full, later marks cannot change any answer in it.
+                if direction >= 0 and len(found) >= take:
+                    break
         prev_sig = sig
 
-    if direction >= 0:
-        found = [p for p in runs if p["frame"] >= frame]
-    else:
-        found = [p for p in runs if p["frame"] <= frame][::-1]
-    return {"problems": found[:max(1, limit)], "total": len(runs),
-            "scanned": len(marks), "spans": len(events)}
+    if direction < 0:
+        found.reverse()
+    return {"problems": found[:take], "spans": len(events)}
 
 
 @PLUGIN.route.get("/{capture_id}/problems")

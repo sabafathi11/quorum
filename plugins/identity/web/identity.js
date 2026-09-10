@@ -18,7 +18,7 @@ export default {
     const app = () => window.quorum;
     const S = { assignments: {}, cids: [], nextCid: 1, counts: {}, loaded: false,
                 scope: localStorage.getItem('quorum.identity.scope') || 'identity',
-                problems: 0, localOps: new Set() };
+                localOps: new Set() };
 
     const cidOf = (entry) => {
       const m = S.assignments[entry.stream.key];
@@ -33,8 +33,9 @@ export default {
 
     let pendingWrites = 0;
     let loadTimer = null;
-    let problemTimer = null;
-    let problemCache = null;
+    // A direction/filter-specific batch of nearby problem runs.  Navigation
+    // never asks the server to count every problem in the capture.
+    const problemCache = new Map();
 
     const recount = () => {
       const cids = [...new Set(Object.values(S.assignments)
@@ -49,21 +50,20 @@ export default {
     };
 
     const updateOutsideProblems = (items) => {
-      if (!problemCache) return;
       const ids = new Set(items.map(([stream, key]) => app().findObject(stream, key)?.id)
         .filter((id) => id != null));
       if (!ids.size) return;
-      problemCache.problems = problemCache.problems.flatMap((p) => {
-        const objects = (p.objects || []).filter((id) => !ids.has(id));
-        if (p.kind === 'duplicate') {
-          if (objects.length < 2) return [];
-          return [{ ...p, objects,
-            why: `id ${p.cid} is on ${objects.length} masks in ${p.stream}` }];
-        }
-        return objects.length ? [{ ...p, objects }] : [];
-      });
-      problemCache.total = problemCache.problems.length;
-      S.problems = problemCache.total;
+      for (const batch of problemCache.values()) {
+        batch.problems = batch.problems.flatMap((p) => {
+          const objects = (p.objects || []).filter((id) => !ids.has(id));
+          if (p.kind === 'duplicate') {
+            if (objects.length < 2) return [];
+            return [{ ...p, objects,
+              why: `id ${p.cid} is on ${objects.length} masks in ${p.stream}` }];
+          }
+          return objects.length ? [{ ...p, objects }] : [];
+        });
+      }
       app().renderInspector();
     };
 
@@ -75,7 +75,7 @@ export default {
       const outside = kind === 'identity.outside'
         || (kind === 'identity.assign' && Number(payload?.cid) === OUTSIDE);
       if (outside) updateOutsideProblems(items);
-      else problemCache = null;
+      else problemCache.clear();
       if (kind === 'identity.clear') {
         for (const [s, k] of items) delete (S.assignments[s] || {})[k];
       } else if (kind === 'identity.assign') {
@@ -102,21 +102,15 @@ export default {
       ctx.invalidate();
     };
 
-    const scheduleProblems = (delay = 250) => {
-      clearTimeout(problemTimer);
-      problemTimer = setTimeout(() => { problemTimer = null; countProblems(); }, delay);
-    };
-
     const load = async () => {
       if (pendingWrites) return scheduleLoad(250);
       const cap = ctx.store.get('capture');
       if (!cap) return;
       const st = await ctx.call(`/${cap.id}/state`);
       Object.assign(S, st, { loaded: true });
-      problemCache = null;
+      problemCache.clear();
       app().renderInspector();
       ctx.invalidate();
-      scheduleProblems();
     };
 
     const scheduleLoad = (delay = 150) => {
@@ -133,12 +127,7 @@ export default {
           setTimeout(() => S.localOps.delete(op.id), 30000);
           const outside = op.kind === 'identity.outside'
             || (op.kind === 'identity.assign' && Number(op.payload?.cid) === OUTSIDE);
-          if (outside && problemCache) {
-            S.problems = problemCache.total;
-            app().renderInspector();
-          } else {
-            scheduleProblems(50);
-          }
+          if (outside) app().renderInspector();
           // `identity.link` allocates on the server from every identity that
           // has ever existed, including one later cleared.  The compact state
           // endpoint intentionally does not carry that historical set, so a
@@ -155,17 +144,6 @@ export default {
         })
         .finally(() => { pendingWrites = Math.max(0, pendingWrites - 1); });
     };
-    const countProblems = async () => {
-      const cap = ctx.store.get('capture');
-      const layer = maskLayer();
-      if (!cap || !layer) return;
-      try {
-        const f = ctx.display.query;
-        const r = await ctx.call(`/${cap.id}/problems?frame=0&limit=1${f ? `&${f}` : ''}`);
-        S.problems = r.total ?? 0;
-        app().renderInspector();
-      } catch { /* the counter is a nicety, never a blocker */ }
-    };
     ctx.on('capture', load);
     ctx.onOp((op) => {
       if (!op.kind?.startsWith('identity.') && !op.kind?.startsWith('masks.')) return;
@@ -174,7 +152,7 @@ export default {
         S.localOps.delete(op.id);  // the WebSocket echo of our own confirmed op
         return;
       }
-      problemCache = null;
+      problemCache.clear();
       scheduleLoad();
     });
     if (ctx.store.get('capture')) load();
@@ -401,28 +379,19 @@ export default {
         // still exists — `reveal` below is door 4 — but a walk that lands on a
         // frame and then declines to point at anything reads as a bug.
         const f = ctx.display.query || '';
-        const cacheKey = `${cap.id}|${f}`;
-        if (!problemCache || problemCache.key !== cacheKey) {
-          // The server's scan already computes every problem run before it
-          // returns the first one. Fetch that result once, then make Next /
-          // Previous a local lookup instead of rescanning the capture every
-          // time the annotator presses the button.
+        const cacheKey = `${cap.id}|${f}|${direction >= 0 ? 'next' : 'prev'}`;
+        let batch = problemCache.get(cacheKey);
+        let p = batch?.problems.find((x) => direction >= 0 ? x.frame >= from : x.frame <= from);
+        if (!p) {
+          // Fetch only a few nearest runs.  The server stops the forward scan
+          // as soon as this batch is full; later clicks consume it locally.
           const r = await ctx.call(
-            `/${cap.id}/problems?frame=0&direction=1&limit=100000` +
+            `/${cap.id}/problems?frame=${Math.max(0, from)}&direction=${direction}&limit=4` +
             (f ? `&${f}` : ''));
-          problemCache = { key: cacheKey, problems: r.problems || [], total: r.total ?? 0 };
+          batch = { problems: r.problems || [] };
+          problemCache.set(cacheKey, batch);
+          p = batch.problems[0] || null;
         }
-        const problems = problemCache.problems;
-        let p = null;
-        if (direction >= 0) {
-          p = problems.find((x) => x.frame >= from) || null;
-        } else {
-          for (const x of problems) {
-            if (x.frame > from) break;
-            p = x;
-          }
-        }
-        S.problems = problemCache.total;
         if (!p) {
           ctx.toast('Nothing left', direction >= 0
             ? 'No unset track and no repeated identity after this frame.'
@@ -519,8 +488,8 @@ export default {
             h('button', { class: 'btn sm grow', onclick: () => walk(1), title: 'Shift+Space' },
               'Next problem', h('kbd', {}, '⇧␣')),
             h('button', { class: 'btn sm', onclick: () => walk(-1), title: 'Shift+P' }, '↑')),
-          S.problems ? h('div', { class: 'hint' },
-            `${S.problems} frame${S.problems === 1 ? '' : 's'} still need a human — unset ids and repeated ids.`) : null,
+          h('div', { class: 'hint' },
+            'Next problem loads a small nearby batch of unset or repeated identities.'),
           h('div', { class: 'row' },
             h('button', {
               class: 'btn sm grow', title: 'Suggest re-links after a gap (proposals)',

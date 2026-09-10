@@ -112,7 +112,7 @@ def test_a_track_created_in_place_is_offered_to_the_walk():
 
     Before the fix the walk removed that key from *every* layer, so the only
     copy — the one on screen, with no identity — vanished from the scan.
-    `total` came back 0 and Shift+Space reported "Nothing left".
+    The problem batch came back empty and Shift+Space reported "Nothing left".
     """
     with tempfile.TemporaryDirectory() as tmp:
         host = _host(tmp)
@@ -127,7 +127,7 @@ def test_a_track_created_in_place_is_offered_to_the_walk():
         assert not hidden("cam1", "sam1", lay), "the only copy of a track is never superseded"
 
         res = I.scan(host, cid, frame=0, direction=1, limit=1)
-        assert res["total"] >= 1, f"the walk found nothing to do: {res}"
+        assert res["problems"], f"the walk found nothing to do: {res}"
         p = res["problems"][0]
         assert p["kind"] == "unset", p
         assert "sam1" in p["why"], p
@@ -201,18 +201,18 @@ def test_an_assigned_track_is_not_a_problem_and_a_repeated_id_is():
         I = _identity(host)
         cid, lay = _capture(host, {"a": [(10, 0), (70, 1)], "b": [(10, 0), (70, 1)]},
                             layer_key=M.DERIVED_KEY)
-        assert I.scan(host, cid, limit=99)["total"] >= 1, "two unset tracks is a problem"
+        assert I.scan(host, cid, limit=99)["problems"], "two unset tracks is a problem"
 
         host.append_op(cid, "identity.link", {"items": [["cam1", "a"]]}, "tester")
         host.append_op(cid, "identity.link", {"items": [["cam1", "b"]]}, "tester")
-        assert I.scan(host, cid, limit=99)["total"] == 0, "both are identified now"
+        assert not I.scan(host, cid, limit=99)["problems"], "both are identified now"
 
         # …and the same identity on two masks in one camera is impossible
         cid2 = I.state_for(host, cid)["assignments"]["cam1"]["a"]
         host.append_op(cid, "identity.assign",
                        {"items": [["cam1", "b"]], "cid": cid2}, "tester")
         out = I.scan(host, cid, limit=99)
-        assert out["total"] >= 1 and out["problems"][0]["kind"] == "duplicate", out
+        assert out["problems"] and out["problems"][0]["kind"] == "duplicate", out
 
 
 def test_the_walk_can_go_backwards():
@@ -225,6 +225,18 @@ def test_the_walk_can_go_backwards():
         back = I.scan(host, cid, frame=99, direction=-1, limit=99)["problems"]
         assert fwd and back, (fwd, back)
         assert back[0]["frame"] >= fwd[0]["frame"], "backwards must start from the far end"
+
+
+def test_the_walk_returns_a_small_batch_without_counting_every_problem():
+    with tempfile.TemporaryDirectory() as tmp:
+        host = _host(tmp)
+        I = _identity(host)
+        tracks = {f"t{i}": [(i * 10, 0), (i * 10 + 2, 1)] for i in range(8)}
+        cid, _ = _capture(host, tracks, layer_key=M.DERIVED_KEY)
+        out = I.scan(host, cid, frame=0, direction=1, limit=4)
+        assert "total" not in out, out
+        assert len(out["problems"]) == 4, out
+        assert [p["frame"] for p in out["problems"]] == [0, 10, 20, 30], out
 
 
 if __name__ == "__main__":

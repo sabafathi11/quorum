@@ -382,7 +382,7 @@ await step('Shift+Space walks to a frame that needs a human, and rings it', asyn
   // investigate and one you learn to skip.
   const seen = await (await window.fetch(
     `/api/p/identity/${capId}/problems?frame=1&direction=1&limit=1`)).json();
-  if (!seen.total) {
+  if (!seen.problems?.length) {
     console.log(`       (this capture has no problem frames — ${seen.spans} live span(s), ` +
                 'nothing for the walk to stop on — skipped)');
     return;
@@ -579,7 +579,7 @@ await step('the walk never stops on a track that was cut, joined or deleted', as
     }
   }
   if (bad.length) throw new Error(`the walk offers superseded tracks: ${bad.slice(0, 4).join(', ')}`);
-  console.log(`       ${r.total} problem run(s) over ${r.spans} live spans, ` +
+  console.log(`       checked a ${r.problems.length}-problem batch over ${r.spans} live spans, ` +
               `${superseded.size} replaced + ${gone.size} deleted skipped`);
 });
 
