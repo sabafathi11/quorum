@@ -403,6 +403,7 @@ export default {
       if (!cap || !layer) return ctx.toast('No mask layer', 'Import one first.', 'warn');
       if (walking) return;
       walking = true;
+      A.renderInspector();
       A.pause();
       const from = ctx.store.get('frame') + (direction >= 0 ? 1 : -1);
       try {
@@ -468,7 +469,10 @@ export default {
             .finally(() => { batch.pending = null; });
         }
         app().renderInspector();
-      } finally { walking = false; }
+      } finally {
+        walking = false;
+        A.renderInspector();
+      }
     };
 
     for (const [id, title, keys, run] of [
@@ -546,9 +550,9 @@ export default {
             h('button', { class: 'btn sm danger', onclick: clear, title: 'C' }, 'Clear'),
             h('button', { class: 'btn sm', onclick: split, title: 'T' }, 'Split here', h('kbd', {}, 'T'))),
           h('div', { class: 'row' },
-            h('button', { class: 'btn sm grow', onclick: () => walk(1), title: 'Shift+Space' },
-              'Next problem', h('kbd', {}, '⇧␣')),
-            h('button', { class: 'btn sm', onclick: () => walk(-1), title: 'Shift+P' }, '↑')),
+            h('button', { class: 'btn sm grow', onclick: () => walk(1), title: 'Shift+Space', disabled: walking },
+              walking ? 'Finding next problem…' : 'Next problem', h('kbd', {}, '⇧␣')),
+            h('button', { class: 'btn sm', onclick: () => walk(-1), title: 'Shift+P', disabled: walking }, '↑')),
           h('div', { class: 'hint' },
             'Next problem loads a small nearby batch of unset or repeated identities.'),
           h('div', { class: 'row' },
