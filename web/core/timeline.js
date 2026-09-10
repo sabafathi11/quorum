@@ -47,7 +47,20 @@ export class Timeline {
       class: 'scrub', type: 'range', min: 0, max: Math.max(0, cap.n_frames - 1), value: 0,
       oninput: (e) => this.app.setFrame(parseInt(e.target.value, 10)),
     });
-    this.counter = h('span', { class: 'mono' });
+    this.frameInput = h('input', {
+      class: 'frame-jump mono', type: 'number', inputMode: 'numeric', min: 0,
+      max: Math.max(0, cap.n_frames - 1), value: 0,
+      title: 'Jump to frame (Enter)', 'aria-label': 'Jump to frame',
+      onkeydown: (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        this.jumpToFrame(e.currentTarget.value);
+        e.currentTarget.blur();
+      },
+      onchange: (e) => this.jumpToFrame(e.currentTarget.value),
+    });
+    this.frameMeta = h('span');
+    this.counter = h('span', { class: 'mono frame-counter' }, this.frameInput, this.frameMeta);
     this.playBtn = h('button', { class: 'btn icon', title: 'Play / pause  (Space)', onclick: () => this.app.togglePlay() }, '▶');
     this.speed = h('select', { class: 'sel', style: { width: '68px' }, onchange: (e) => {
       this.store.set({ speed: parseFloat(e.target.value) });
@@ -94,6 +107,19 @@ export class Timeline {
     this.app.setFrame(Math.round(x * (cap.n_frames - 1)));
   }
 
+  jumpToFrame(value) {
+    const cap = this.store.get('capture');
+    const frame = Number(value);
+    if (!Number.isFinite(frame)) {
+      this.frameInput.value = this.store.get('frame');
+      return;
+    }
+    this.app.pause();
+    const target = clamp(Math.round(frame), 0, Math.max(0, cap.n_frames - 1));
+    this.app.setFrame(target);
+    this.frameInput.value = target;
+  }
+
   // Per-stream activity: how many objects are drawn on each pixel column, and
   // where the selection lives. Computed once per data change, not per frame.
   computeSpans() {
@@ -127,7 +153,9 @@ export class Timeline {
   paint() {
     const cap = this.store.get('capture');
     const frame = this.store.get('frame');
-    this.counter.textContent = `${String(frame).padStart(5, ' ')} / ${cap.n_frames - 1}   ${timecode(frame, cap.fps)}`;
+    // Do not replace digits while somebody is halfway through typing a jump.
+    if (document.activeElement !== this.frameInput) this.frameInput.value = frame;
+    this.frameMeta.textContent = ` / ${cap.n_frames - 1}   ${timecode(frame, cap.fps)}`;
     this.scrub.value = frame;
     this.playBtn.textContent = this.store.get('playing') ? '❚❚' : '▶';
     if (!this.showLanes) return;

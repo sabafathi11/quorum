@@ -191,6 +191,12 @@ kbd{
 }
 .scrub::-moz-range-track{height:4px;border-radius:99px;background:var(--line-2)}
 .scrub::-moz-range-thumb{width:12px;height:12px;border:2px solid var(--panel);border-radius:99px;background:var(--accent)}
+.frame-counter{white-space:nowrap;color:var(--fg-2)}
+.frame-jump{
+  width:9ch;padding:2px 4px;background:var(--panel-2);border:1px solid var(--line-2);
+  border-radius:4px;color:var(--fg);font:inherit;text-align:right;
+}
+.frame-jump:focus{outline:1px solid var(--accent);border-color:var(--accent)}
 
 /* ---------------------------------------------------------------- overlays */
 .overlay-root{position:fixed;inset:0;pointer-events:none;z-index:50}
