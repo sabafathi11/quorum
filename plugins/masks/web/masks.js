@@ -42,8 +42,16 @@ export default {
       const cap = ctx.store.get('capture');
       if (!cap || S.busy) return;
       const verb = op.kind.split('.')[1];
-      const mine = S.localOps.has(op.id) && !op.undone;
-      S.localOps.delete(op.id);
+      // A structural edit can originate from the Identity workspace too.  A
+      // local delivery has already been materialised by `/masks/.../op`; keep
+      // its id until the WebSocket echo arrives so that echo does not rebuild
+      // the layer a second time.
+      if (op._source === 'remote' && S.localOps.has(op.id)) {
+        S.localOps.delete(op.id);
+        return;
+      }
+      const mine = (op._source === 'local' || S.localOps.has(op.id)) && !op.undone;
+      if (op._source === 'local') S.localOps.add(op.id);
       S.busy = true;
       try {
         if (!mine && NEEDS_REBUILD.has(verb)) await ctx.call(`/${cap.id}/materialise`, { method: 'POST' });
@@ -155,7 +163,7 @@ export default {
                                  { method: 'POST', body: { kind, payload }, quiet: true });
         S.localOps.add(r.op.id);
         Object.assign(S, r.state);
-        app().bus?.emit?.('op', r.op);
+        app().bus?.emit?.('op', { ...r.op, _source: 'local' });
         if (NEEDS_REBUILD.has(kind.replace(/^masks\./, ''))) await ctx.reloadLayers();
         else { app().renderInspector(); ctx.invalidate(); }
         return r;

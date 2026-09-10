@@ -350,6 +350,37 @@ export default {
       if (Number.isFinite(cid)) submit('identity.assign', { items, cid });
     };
 
+    const split = async () => {
+      const A = app();
+      const selected = [...ctx.store.get('selection')].map((id) => A.objectOf(id)).filter(Boolean);
+      if (!selected.length) return ctx.toast('Nothing selected', 'Select one track to split.', 'warn');
+      if (selected.length !== 1) {
+        return ctx.toast('One track', 'Split one track at a time. Ctrl+click selects a single track.', 'warn');
+      }
+      const o = selected[0];
+      const data = A.layerData((l) => l.id === o.layer_id);
+      const frame = data ? data.mapFrame(o.stream, ctx.store.get('frame')) : ctx.store.get('frame');
+      if (frame <= o.first_frame || frame > o.last_frame) {
+        return ctx.toast('Nothing to split here',
+          `${o.key} runs ${o.first_frame}–${o.last_frame} in ${o.stream}; you are at ${frame}.`, 'warn');
+      }
+      const cap = ctx.store.get('capture');
+      try {
+        const r = await ctx.call(`/${cap.id}/op`, {
+          method: 'POST', body: { kind: 'split', payload: { stream: o.stream, key: o.key, frame } },
+          quiet: true,
+        });
+        // Let the masks plugin refresh its derived layer and let every other
+        // workspace observe the same confirmed op, without a second rebuild
+        // when the server echoes it through the socket.
+        ctx.emit('op', { ...r.op, _source: 'local' });
+        ctx.toast('Split', `${o.key} → ${o.key} and ${o.key}@${frame}`);
+      } catch (e) {
+        ctx.toast(e.status === 409 ? 'That split cannot apply' : 'Split failed',
+                  e.message || String(e), e.status === 409 ? 'warn' : 'err');
+      }
+    };
+
     const setScope = (v) => {
       S.scope = v;
       localStorage.setItem('quorum.identity.scope', v);
@@ -417,6 +448,7 @@ export default {
       ['assign', 'Assign selected tracks to an identity…', ['A'], assignTo],
       ['clear', 'Clear identity from selection', ['C'], clear],
       ['outside', 'Flag selection as outside', ['O'], outside],
+      ['split', 'Split the selected track at this frame', ['T'], split],
       ['next', 'Walk to the next frame that needs a human', ['Shift+Space', 'N'], () => walk(1)],
       ['prev', 'Walk back to the previous one', ['Shift+P'], () => walk(-1)],
       ['scope', 'Selection scope: identity / single track', ['Q'],
@@ -483,7 +515,8 @@ export default {
             h('button', { class: 'btn sm primary', onclick: link, title: 'M' }, 'Link', h('kbd', {}, 'M')),
             h('button', { class: 'btn sm', onclick: assignTo, title: 'A' }, 'Assign…'),
             h('button', { class: 'btn sm', onclick: outside, title: 'O' }, 'Outside'),
-            h('button', { class: 'btn sm danger', onclick: clear, title: 'C' }, 'Clear')),
+            h('button', { class: 'btn sm danger', onclick: clear, title: 'C' }, 'Clear'),
+            h('button', { class: 'btn sm', onclick: split, title: 'T' }, 'Split here', h('kbd', {}, 'T'))),
           h('div', { class: 'row' },
             h('button', { class: 'btn sm grow', onclick: () => walk(1), title: 'Shift+Space' },
               'Next problem', h('kbd', {}, '⇧␣')),
