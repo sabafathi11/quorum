@@ -16,6 +16,7 @@ export class LayerData {
     this.keys = new Map();                  // object id -> {f:[], o:[], p:[]}
     this.cov = null;                        // covered capture-frame range
     this.pending = null;
+    this.wanted = null;                     // newest playhead while a batch is in flight
     this.version = 0;                       // bumped whenever drawable data changed
   }
 
@@ -73,8 +74,13 @@ export class LayerData {
   // window runs out mid-second and the masks stop until it arrives — which is
   // what "the masks lag and then catch up" looked like.
   async ensure(frame, lead = 6) {
+    // Playback calls this once per presented video frame.  Keep only the most
+    // recent target while a batch is travelling: starting one GET per frame
+    // turns a small runway into a queue of stale responses, which is how masks
+    // visibly trail the video and briefly draw old keyframes.
+    this.wanted = { frame, lead };
     if (this.cov && frame >= this.cov.from && frame <= this.cov.to - lead) return false;
-    if (this.pending?.frame === frame) return this.pending.p;
+    if (this.pending) return this.pending.p;
     // Read the window size once. It is derived from a live latency estimate, so
     // a second read could disagree with the first and leave `cov` claiming a
     // range the request never asked for — masks missing at the seam, on a link
@@ -95,11 +101,19 @@ export class LayerData {
       this.cov = adjacent && this.cov
         ? { from: Math.min(this.cov.from, frame), to: Math.max(this.cov.to, frame + span) }
         : { from: frame, to: frame + span };
-      this.pending = null;
       this.version++;
       return true;
-    }).catch(() => { this.pending = null; return false; });
-    this.pending = { frame, p };
+    }).catch(() => false).finally(() => {
+      this.pending = null;
+      // If the video crossed the freshly loaded runway while this request was
+      // in flight, immediately start the next batch from the latest frame.
+      // Nobody awaits this follow-up; it is the piggyback prefetch for the
+      // frames already being presented.
+      const wanted = this.wanted;
+      if (wanted && (!this.cov || wanted.frame < this.cov.from ||
+          wanted.frame > this.cov.to - wanted.lead)) this.ensure(wanted.frame, wanted.lead);
+    });
+    this.pending = { frame, span, p };
     return p;
   }
 
@@ -109,6 +123,11 @@ export class LayerData {
   // hidden ones removed, and which is what the viewport and the hit test are
   // given. See display.js.
   activeAtRaw(frame) {
+    // A keyframe from the preceding window is not evidence about the current
+    // video frame.  Rather than draw that stale mask as a ghost, wait for the
+    // prefetched batch that covers this frame.  During normal playback the
+    // single-flight runway above keeps this branch cold.
+    if (!this.loaded(frame)) return [];
     const out = [];
     for (const st of this.streams) {
       const objs = this.byStream.get(st.key);
