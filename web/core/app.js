@@ -1042,6 +1042,9 @@ class App {
       when: () => !!this.viewport, run: () => this.viewport.fit() });
     K.register({ id: 'core.clear', title: 'Clear selection', keys: ['Esc'], group: 'Select',
       when: () => !!cap(), run: () => this.clearSelection() });
+    K.register({ id: 'core.editIdentity', title: 'Switch between Edit and Identity', keys: ['I'], group: 'App',
+      when: () => ['edit', 'identity'].includes(this.store.get('tool')),
+      run: () => this.activateTool(this.store.get('tool') === 'edit' ? 'identity' : 'edit') });
     K.register({ id: 'core.palette', title: 'Command palette', keys: ['Ctrl+K'], group: 'App',
       run: () => this.keymap.palette() });
     K.register({ id: 'core.inspector', title: 'Show / hide the inspector', keys: ['Ctrl+B'], group: 'App',
