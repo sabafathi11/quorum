@@ -451,6 +451,19 @@ class App {
     if (r.some(Boolean)) this.viewport?.invalidate();
   }
 
+  async ensureFrameData(frame) {
+    // `LayerData` keeps only one request in flight and lets it finish before
+    // beginning the newest target. A rapid sequence of step clicks can land
+    // behind that first request, so wait through a few hand-offs rather than
+    // moving the video to a frame whose masks are still unknown.
+    for (let i = 0; i < 4; i++) {
+      await this.ensureData(frame);
+      const ready = this.visibleLayers().every((l) => this.data.get(l.id)?.loaded(frame));
+      if (ready) return true;
+    }
+    return false;
+  }
+
   visibleLayers() {
     const cap = this.store.get('capture');
     const vis = this.store.get('layerVis');
@@ -655,7 +668,34 @@ class App {
     this.viewport?.invalidate();
   }
 
-  step(d) { this.pause(); this.setFrame(this.store.get('frame') + d); }
+  step(d) {
+    this.pause();
+    const cap = this.store.get('capture');
+    if (!cap) return;
+    const base = this._stepTarget ?? this.store.get('frame');
+    this._stepTarget = clamp(Math.round(base + d), 0, Math.max(0, cap.n_frames - 1));
+    if (this._stepping) return;
+    this._stepping = true;
+    (async () => {
+      try {
+        while (this._stepTarget !== this.store.get('frame')) {
+          const target = this._stepTarget;
+          if (!await this.ensureFrameData(target)) {
+            ui.toast('Masks still loading', 'The frame was kept in place until mask data is available.', 'warn');
+            this._stepTarget = this.store.get('frame');
+            break;
+          }
+          // More clicks may have arrived while the data was loading. In that
+          // case fetch their newest target before changing what is on screen.
+          if (target !== this._stepTarget) continue;
+          this.setFrame(target);
+        }
+      } finally {
+        this._stepping = false;
+        this._stepTarget = this.store.get('frame');
+      }
+    })();
+  }
 
   togglePlay() { this.store.get('playing') ? this.pause() : this.playOn(); }
   playOn() { this.store.set({ playing: true }); this.viewport?.play(true); }
