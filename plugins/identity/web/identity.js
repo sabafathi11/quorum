@@ -467,6 +467,7 @@ export default {
     // with no identity, or one identity on two masks in one camera — select the
     // offender and ring it. `N` is kept as an alias.
     let walking = false;
+    let problemNotice = null;
     const walk = async (direction = 1, retried = false) => {
       const A = app();
       const cap = ctx.store.get('capture');
@@ -526,8 +527,9 @@ export default {
           }
           return;
         }
-        ctx.toast(p.kind === 'duplicate' ? 'Impossible identity' : 'No identity yet', p.why,
-                  p.kind === 'duplicate' ? 'warn' : '');
+        problemNotice?.remove();
+        problemNotice = ctx.toast(p.kind === 'duplicate' ? 'Impossible identity' : 'No identity yet', p.why,
+                                  p.kind === 'duplicate' ? 'warn' : '', { sticky: true });
         // The problem just visited can never be the next destination. Keep
         // only future runs, then refill below four in the background. This
         // leaves the following clicks instant while one small request carries

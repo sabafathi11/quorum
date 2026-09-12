@@ -6,15 +6,22 @@ const overlays = () => document.getElementById('overlays');
 
 // ------------------------------------------------------------------- toasts
 let toastHost;
-export function toast(title, message = '', kind = '') {
+export function toast(title, message = '', kind = '', { sticky = false } = {}) {
   if (!toastHost) overlays().append(toastHost = h('div', { class: 'toasts' }));
-  const el = h('div', { class: `toast ${kind}` },
+  let el;
+  const close = () => {
+    el.style.opacity = '0'; el.style.transition = 'opacity .3s';
+    setTimeout(() => el.remove(), 320);
+  };
+  el = h('div', { class: `toast ${kind}` },
     h('div', { class: 't' }, title),
-    message && h('div', { class: 'm' }, message));
+    message && h('div', { class: 'm' }, message),
+    sticky && h('div', { class: 'row', style: { marginTop: '7px', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn sm primary', onclick: close }, 'OK')));
   toastHost.append(el);
+  if (sticky) return el;
   const life = kind === 'err' ? 9000 : 4200;
-  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, life);
-  setTimeout(() => el.remove(), life + 320);
+  setTimeout(close, life);
   return el;
 }
 
