@@ -467,7 +467,7 @@ export default {
     // with no identity, or one identity on two masks in one camera — select the
     // offender and ring it. `N` is kept as an alias.
     let walking = false;
-    const walk = async (direction = 1) => {
+    const walk = async (direction = 1, retried = false) => {
       const A = app();
       const cap = ctx.store.get('capture');
       const layer = maskLayer();
@@ -513,7 +513,17 @@ export default {
           pulse: { ms: 2000, rings: 3, color: p.kind === 'duplicate' ? '#E27C99' : '#F5C542' },
         });
         if (!shown.shown.length) {
-          ctx.toast('Skipped', 'That problem is on a track you are not being shown.', 'warn');
+          problemEpoch++;
+          problemCache.clear();
+          if (!retried) {
+            // An edit can replace object ids while a nearby batch is already
+            // cached. Re-query once instead of leaving the annotator at an
+            // empty frame; a second failure is a genuine display filter issue.
+            ctx.toast('Refreshing problem', 'The cached track changed; checking the server once.', 'warn');
+            setTimeout(() => walk(direction, true), 0);
+          } else {
+            ctx.toast('Problem is hidden', 'The server found it, but your current display filters hide it.', 'warn');
+          }
           return;
         }
         ctx.toast(p.kind === 'duplicate' ? 'Impossible identity' : 'No identity yet', p.why,

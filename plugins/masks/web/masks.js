@@ -170,6 +170,11 @@ export default {
                                  { method: 'POST', body: { kind, payload }, quiet: true });
         S.localOps.add(r.op.id);
         Object.assign(S, r.state);
+        // `visibleId` is memoised by the display authority. A delete, restore,
+        // split or join changes exactly the predicates it caches; leaving the
+        // old answers alive made Identity occasionally walk to a valid problem
+        // and then find no drawable object until a page refresh cleared them.
+        ctx.display.changed();
         app().bus?.emit?.('op', { ...r.op, _source: 'local' });
         if (NEEDS_REBUILD.has(kind.replace(/^masks\./, ''))) {
           await ctx.reloadLayer(r.materialised?.layer_id);
