@@ -183,7 +183,7 @@ def hidden_filter(host, capture_id: int):
     return hidden
 
 
-def visibility(host, capture_id: int, layer_id: int) -> dict[str, list]:
+def visibility(host, capture_id: int, layer_id: int, streams: set[str] | None = None) -> dict[str, list]:
     """{stream key: [(start, end, object id, object key)]} in *stream* frames.
 
     A track is visible from a keyframe with outside=0 until the next keyframe
@@ -193,11 +193,15 @@ def visibility(host, capture_id: int, layer_id: int) -> dict[str, list]:
     n = host.db.scalar(
         "SELECT COUNT(*) FROM shapes sh JOIN objects o ON o.id=sh.object_id WHERE o.layer_id=?",
         layer_id)
-    hit = _INTERVALS.get((capture_id, layer_id))
+    stream_key = tuple(sorted(streams)) if streams is not None else None
+    cache_key = (capture_id, layer_id, stream_key)
+    hit = _INTERVALS.get(cache_key)
     if hit and hit[0] == n:
         return hit[1]
     out: dict[str, list] = {}
     for st in host.db.all("SELECT id, key FROM streams WHERE capture_id=? ORDER BY idx", capture_id):
+        if streams is not None and st["key"] not in streams:
+            continue
         spans = []
         rows = host.db.all(
             "SELECT o.id AS oid, o.key AS okey, o.last_frame, sh.frame, sh.outside "
@@ -221,7 +225,7 @@ def visibility(host, capture_id: int, layer_id: int) -> dict[str, list]:
         if open_at is not None:
             spans.append((open_at, last_end, cur_oid, cur_key))
         out[st["key"]] = spans
-    _INTERVALS[(capture_id, layer_id)] = (n, out)
+    _INTERVALS[cache_key] = (n, out)
     return out
 
 
@@ -251,7 +255,8 @@ def _frame_maps(host, capture_id: int) -> dict[str, "np.ndarray | None"]:
 
 
 def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
-         direction: int = 1, limit: int = 1, filter: str = "") -> dict:
+         direction: int = 1, limit: int = 1, filter: str = "",
+         include_hidden: bool = False) -> dict:
     """The next capture frame at or after `frame` that needs a human.
 
     Every mask layer is scanned, not one: after an edit, a track may be served
@@ -281,12 +286,15 @@ def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
     hidden = hidden_filter(host, capture_id)
     want = ObjectFilter.parse(filter)
     excluded = set() if want.empty else _filtered_out(host, capture_id, want)
+    allowed_streams = {r["key"] for r in host.db.all(
+        "SELECT key FROM streams WHERE capture_id=? AND (? OR enabled=1)",
+        capture_id, 1 if include_hidden else 0)}
     layers = [layer_id] if layer_id else mask_layers(host, capture_id)
     spans: dict[str, list] = {}
     for lid in layers:
         if lid in want.layers_exclude:
             continue
-        for skey, sp in visibility(host, capture_id, lid).items():
+        for skey, sp in visibility(host, capture_id, lid, allowed_streams).items():
             spans.setdefault(skey, []).extend(
                 s for s in sp
                 if not hidden(skey, s[3], lid) and s[2] not in excluded)
@@ -373,10 +381,11 @@ def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
 @PLUGIN.route.get("/{capture_id}/problems")
 def problems(capture_id: int, request: Request, layer_id: int = 0, frame: int = 0,
              direction: int = 1, limit: int = 1, filter: str = "",
+             include_hidden: bool = False,
              user: dict = Depends(current_user)):
     """`scan`, over HTTP. Everything it decides is in `scan`."""
     return scan(request.app.state.host, capture_id, layer_id=layer_id, frame=frame,
-                direction=direction, limit=limit, filter=filter)
+                direction=direction, limit=limit, filter=filter, include_hidden=include_hidden)
 
 
 # ---------------------------------------------------------------- validator

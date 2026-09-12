@@ -255,6 +255,7 @@ export class PluginHost {
       reveal: (ids, opts) => app.reveal(ids, opts),
       findObject: (stream, key, pred) => app.findObject(stream, key, pred),
       reloadLayers: () => app.reloadLayers(),
+      reloadLayer: (layerId) => app.reloadLayer(layerId),
       undo: (kind) => app.undo(kind),
       onOp: (fn) => app.bus.on('op', fn),
       on: (evt, fn) => app.bus.on(evt, fn),

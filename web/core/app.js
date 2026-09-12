@@ -560,6 +560,26 @@ class App {
     this.renderInspector();
   }
 
+  // Structural mask edits normally change only the derived `edits` layer.
+  // Re-reading every unchanged source layer made a two-track join feel like a
+  // whole-capture reload. A first edit may create that layer, so fall back to
+  // the complete refresh until it is part of this capture's known layout.
+  async reloadLayer(layerId) {
+    const cap = this.store.get('capture');
+    const layer = cap?.layers?.find((l) => l.id === layerId);
+    if (!layer) return this.reloadLayers();
+    const d = new LayerData(this.api, layer, cap.streams);
+    this.data.set(layer.id, d);
+    await d.loadObjects();
+    await d.ensure(this.store.get('frame'));
+    const renderer = this.viewport?.renderers.get(layer.id);
+    renderer?.dispose?.();
+    this.viewport?.renderers.delete(layer.id);
+    this.bus.emit('data', d);
+    this.viewport?.invalidate();
+    this.renderInspector();
+  }
+
   // ------------------------------------------------------------------- ops
   async postOp(kind, payload, { source = null } = {}) {
     const cap = this.store.get('capture');

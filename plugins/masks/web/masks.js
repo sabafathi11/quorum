@@ -171,7 +171,9 @@ export default {
         S.localOps.add(r.op.id);
         Object.assign(S, r.state);
         app().bus?.emit?.('op', { ...r.op, _source: 'local' });
-        if (NEEDS_REBUILD.has(kind.replace(/^masks\./, ''))) await ctx.reloadLayers();
+        if (NEEDS_REBUILD.has(kind.replace(/^masks\./, ''))) {
+          await ctx.reloadLayer(r.materialised?.layer_id);
+        }
         else { app().renderInspector(); ctx.invalidate(); }
         return r;
       } catch (e) {

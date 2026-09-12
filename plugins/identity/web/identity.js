@@ -18,6 +18,7 @@ export default {
     const app = () => window.quorum;
     const S = { assignments: {}, cids: [], nextCid: 1, counts: {}, loaded: false,
                 scope: localStorage.getItem('quorum.identity.scope') || 'identity',
+                includeHidden: localStorage.getItem('quorum.identity.includeHidden') === '1',
                 localOps: new Set() };
 
     const cidOf = (entry) => {
@@ -39,6 +40,7 @@ export default {
     let problemEpoch = 0;
     let problemPrefetchTimer = null;
     const problemId = (p) => `${p.frame}|${p.kind}|${p.cid ?? ''}|${(p.objects || []).join(',')}`;
+    const hiddenQuery = () => S.includeHidden ? '&include_hidden=true' : '';
 
     const recount = () => {
       const cids = [...new Set(Object.values(S.assignments)
@@ -52,7 +54,7 @@ export default {
       }
     };
 
-    const updateOutsideProblems = (items) => {
+    const removeCachedProblems = (items) => {
       const ids = new Set(items.map(([stream, key]) => app().findObject(stream, key)?.id)
         .filter((id) => id != null));
       if (!ids.size) return;
@@ -78,7 +80,7 @@ export default {
       const outside = kind === 'identity.outside'
         || (kind === 'identity.assign' && Number(payload?.cid) === OUTSIDE);
       problemEpoch++;
-      if (outside) updateOutsideProblems(items);
+      if (outside) removeCachedProblems(items);
       else problemCache.clear();
       if (kind === 'identity.clear') {
         for (const [s, k] of items) delete (S.assignments[s] || {})[k];
@@ -114,7 +116,6 @@ export default {
       Object.assign(S, st, { loaded: true });
       problemEpoch++;
       problemCache.clear();
-      if (ctx.store.get('tool') === 'identity') scheduleProblemPrefetch();
       app().renderInspector();
       ctx.invalidate();
     };
@@ -134,7 +135,7 @@ export default {
         const cap = ctx.store.get('capture');
         if (!cap || !maskLayer() || ctx.store.get('tool') !== 'identity' || epoch !== problemEpoch) return;
         const f = ctx.display.query || '';
-        const cacheKey = `${cap.id}|${f}|next`;
+        const cacheKey = `${cap.id}|${f}|next|${S.includeHidden ? 'all' : 'shown'}`;
         const from = ctx.store.get('frame') + 1;
         let batch = problemCache.get(cacheKey);
         if (batch?.pending) return;
@@ -148,7 +149,7 @@ export default {
         const start = batch.problems.length ? edge + 1 : edge;
         const need = Math.max(1, 4 - batch.problems.length);
         batch.pending = ctx.call(`/${cap.id}/problems?frame=${start}&direction=1&limit=${need}`
-          + (f ? `&${f}` : ''))
+          + hiddenQuery() + (f ? `&${f}` : ''))
           .then((r) => {
             if (epoch !== problemEpoch || problemCache.get(cacheKey) !== batch) return;
             const seen = new Set(batch.problems.map(problemId));
@@ -194,6 +195,22 @@ export default {
       if (op._source === 'local' && op.kind.startsWith('identity.')) return;
       if (op._source === 'remote' && S.localOps.has(op.id)) {
         S.localOps.delete(op.id);  // the WebSocket echo of our own confirmed op
+        return;
+      }
+      if (op.kind === 'masks.delete') {
+        // Deleting cannot create a new identity problem. Drop only the tracks
+        // it solved from the local queue; do not start an expensive rescan.
+        problemEpoch++;
+        removeCachedProblems(op.payload?.keys?.map((k) => [op.payload.stream, k]) || []);
+        return;
+      }
+      if (op.kind.startsWith('masks.')) {
+        // A cut, join or restore can change the problem set, but it does not
+        // change identity assignments. The next explicit Identity walk will
+        // refill the cache; do not compete with this structural edit's layer
+        // reload by scanning the entire capture in the background.
+        problemEpoch++;
+        problemCache.clear();
         return;
       }
       problemEpoch++;
@@ -435,6 +452,16 @@ export default {
         : 'Clicking selects the whole identity. Ctrl+click selects one track.');
     };
 
+    const setIncludeHidden = (v) => {
+      S.includeHidden = v;
+      localStorage.setItem('quorum.identity.includeHidden', v ? '1' : '0');
+      problemEpoch++;
+      problemCache.clear();
+      scheduleProblemPrefetch();
+      app().renderInspector();
+      ctx.toast('Problem cameras', v ? 'including hidden cameras' : 'hidden cameras ignored');
+    };
+
     // ------------------------------------------------------------- walk
     // Shift+Space: play forward to the next frame that needs a human — a track
     // with no identity, or one identity on two masks in one camera — select the
@@ -456,7 +483,7 @@ export default {
         // still exists — `reveal` below is door 4 — but a walk that lands on a
         // frame and then declines to point at anything reads as a bug.
         const f = ctx.display.query || '';
-        const cacheKey = `${cap.id}|${f}|${direction >= 0 ? 'next' : 'prev'}`;
+        const cacheKey = `${cap.id}|${f}|${direction >= 0 ? 'next' : 'prev'}|${S.includeHidden ? 'all' : 'shown'}`;
         let batch = problemCache.get(cacheKey);
         let p = batch?.problems.find((x) => direction >= 0 ? x.frame >= from : x.frame <= from);
         if (!p && batch?.pending) {
@@ -470,7 +497,7 @@ export default {
           // as soon as this batch is full; later clicks consume it locally.
           const r = await ctx.call(
             `/${cap.id}/problems?frame=${Math.max(0, from)}&direction=${direction}&limit=4` +
-            (f ? `&${f}` : ''));
+            hiddenQuery() + (f ? `&${f}` : ''));
           batch = { problems: r.problems || [], pending: null };
           problemCache.set(cacheKey, batch);
           p = batch.problems[0] || null;
@@ -502,7 +529,7 @@ export default {
             : p.frame;
           const start = Math.max(0, edge + (direction >= 0 ? 1 : -1));
           batch.pending = ctx.call(
-            `/${cap.id}/problems?frame=${start}&direction=${direction}&limit=4` + (f ? `&${f}` : ''))
+            `/${cap.id}/problems?frame=${start}&direction=${direction}&limit=4` + hiddenQuery() + (f ? `&${f}` : ''))
             .then((r) => {
               const seen = new Set(batch.problems.map(problemId));
               for (const next of r.problems || []) {
@@ -597,6 +624,9 @@ export default {
             h('button', { class: 'btn sm grow', onclick: () => walk(1), title: 'Shift+Space', disabled: walking },
               walking ? 'Finding next problem…' : 'Next problem', h('kbd', {}, '⇧␣')),
             h('button', { class: 'btn sm', onclick: () => walk(-1), title: 'Shift+P', disabled: walking }, '↑')),
+          h('button', { class: `chipbtn${S.includeHidden ? ' on' : ''}`,
+            onclick: () => setIncludeHidden(!S.includeHidden) },
+          S.includeHidden ? 'hidden cameras included' : 'hidden cameras ignored'),
           h('div', { class: 'hint' },
             'Next problem loads a small nearby batch of unset or repeated identities.'),
           h('div', { class: 'row' },
