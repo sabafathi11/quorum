@@ -11,6 +11,15 @@ from .db import now
 
 
 def main(argv=None):
+    # On Windows a reload/worker child can inherit stdout as a pipe from the
+    # PowerShell process that launched it. Without line buffering, access logs
+    # then appear in a burst during shutdown, which looks like requests only
+    # happened after Ctrl+C. Make every request line visible when it is logged.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True, write_through=True)
+        except (AttributeError, OSError, TypeError):
+            pass
     ap = argparse.ArgumentParser("quorum")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
