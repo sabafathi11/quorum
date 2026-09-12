@@ -164,6 +164,20 @@ export default {
 
     const edit = async (kind, payload) => {
       const cap = ctx.store.get('capture');
+      const keys = (payload.keys || (payload.key != null ? [payload.key] : [])).map(String);
+      // Delete/restore affect only the display policy, not mask geometry. Paint
+      // that result immediately; the durable operation still follows and a
+      // failed request is reconciled from the server below.
+      if (kind === 'delete' || kind === 'restore') {
+        const deleted = new Set(S.deleted[payload.stream] || []);
+        for (const key of keys) {
+          if (kind === 'delete') deleted.add(key); else deleted.delete(key);
+        }
+        S.deleted = { ...S.deleted, [payload.stream]: [...deleted] };
+        ctx.display.changed();
+        app().renderInspector();
+        ctx.invalidate();
+      }
       S.busy = true;
       try {
         const r = await ctx.call(`/${cap.id}/op`,
@@ -188,14 +202,20 @@ export default {
         // the user pressing a key that silently does nothing.
         if (e.status === 409) ctx.toast('That edit cannot apply', e.message, 'warn');
         else ctx.toast('Edit failed', e.message || String(e), 'err');
+        // An optimistic delete/restore is not durable after a failed request.
+        // Re-read the projection so a red `DEL` label never lies.
+        if (kind === 'delete' || kind === 'restore') await load();
         return null;
       } finally { S.busy = false; }
     };
 
     const del = async () => {
       const sel = need('delete'); if (!sel) return;
-      await edit('delete', { stream: sel[0].stream, keys: sel.map((o) => o.key) });
-      ctx.toast('Deleted', `${sel.length} track(s) hidden — H shows them, Ctrl+Z takes it back.`);
+      const stream = sel[0].stream;
+      const keys = sel.map((o) => o.key);
+      const saved = edit('delete', { stream, keys });
+      ctx.toast('Deleted', `${keys.map((k) => `${stream}/${k}`).join(', ')} marked DEL — saving now.`);
+      await saved;
     };
     const restore = async () => {
       const sel = need('restore'); if (!sel) return;
@@ -267,8 +287,8 @@ export default {
     };
 
     for (const [id, title, keys, run] of [
-      ['delete', 'Delete the selected tracks', ['D'], del],
-      ['restore', 'Restore deleted tracks', ['Shift+D'], restore],
+      ['delete', 'Delete the selected tracks', ['D', 'Del'], del],
+      ['restore', 'Restore deleted tracks', ['Shift+D', 'Shift+Del'], restore],
       ['purge', 'Purge the selected tracks', ['P'], purge],
       ['split', 'Cut the selected track at this frame', ['T'], split],
       ['join', 'Join the selected tracks into one', ['J'], join],
