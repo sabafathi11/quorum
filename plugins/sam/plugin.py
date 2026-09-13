@@ -145,6 +145,54 @@ def to_stream_frame(st: dict, capture_frame: int) -> int:
     return int(fm[max(0, min(int(capture_frame), len(fm) - 1))])
 
 
+def _track_in_batches(ctx, sam, jpegs: list[bytes], seed: dict,
+                      batch_frames: int, timeout: float) -> list[dict | None]:
+    """Track a run without putting every decoded frame on the GPU at once.
+
+    ``handle_track_batch`` keeps every image tensor on the card.  Sending a
+    61-frame 2592x1904 run in one request therefore turns a normal shortcut
+    into a multi-gigabyte allocation (and was the source of the Triton CUDA
+    failures).  The endpoint's returned final mask is a valid seed for the
+    next overlapping batch, so carry it forward one frame at a time.
+    """
+    limit = max(2, int(batch_frames))
+    out: list[dict | None] = []
+    start = 0
+    next_seed = seed
+    total_new = max(1, len(jpegs) - 1)
+    while start < len(jpegs):
+        ctx.check()
+        stop = min(len(jpegs), start + limit)
+        try:
+            per_object = sam.track(jpegs[start:stop], [next_seed], timeout=timeout)
+        except client.SamError as e:
+            raise client.SamError(
+                f"tracker batch {start + 1}-{stop} of {len(jpegs)} failed: {e}") from e
+        got = per_object[0] if per_object else []
+        if len(got) != stop - start:
+            raise RuntimeError(
+                f"SAM batch {start + 1}-{stop} answered {len(got)} masks for "
+                f"{stop - start} frames")
+        ctx.check()
+        if start:
+            out.extend(got[1:])                 # the overlap is already recorded
+        else:
+            out.extend(got)
+        if stop == len(jpegs):
+            break
+        next_seed = got[-1]
+        if next_seed is None:
+            # There is no mask to seed the next request.  This is an ordinary
+            # tracking loss, not a reason to send an invalid request forever.
+            out.extend([None] * (len(jpegs) - stop))
+            break
+        start = stop - 1
+        done = len(out) - 1
+        ctx.progress(0.35 + 0.45 * done / total_new,
+                     f"tracking {done} of {total_new} frames")
+    return out
+
+
 # ---------------------------------------------------------------- readiness
 # Both checks are memoised: readiness is answered on every capture open and
 # before every job submission, and neither a TCP connect nor `docker info`
@@ -415,11 +463,15 @@ def track(ctx):
     times = frames.times_of(stamps, want)
     jpegs = frames.many(src, times, check=ctx.check)
 
-    ctx.progress(0.35, f"tracking {len(want)} frames")
+    # A remote service must not receive a minute of full-resolution frames in
+    # one POST: its handler materialises every image tensor on the GPU.  Twelve
+    # frames keeps a 2592x1904 camera comfortably below that allocation while
+    # the one-frame overlap preserves continuity between requests.
+    batch_frames = int(ctx.settings("track_batch_frames", 12) or 12)
+    timeout = float(ctx.settings("track_timeout", 180) or 180)
+    ctx.progress(0.35, f"tracking {len(want)} frames (batches of {max(2, batch_frames)})")
     sam = endpoint(ctx.plugin)
-    per_obj = sam.track(jpegs, [seed])
-    ctx.check()
-    got = per_obj[0] if per_obj else []
+    got = _track_in_batches(ctx, sam, jpegs, seed, batch_frames, timeout)
     if len(got) != len(want):
         raise RuntimeError(
             f"asked SAM for {len(want)} frames and it answered {len(got)} — refusing to "

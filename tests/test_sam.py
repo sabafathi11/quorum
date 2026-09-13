@@ -483,6 +483,31 @@ def test_a_propagation_is_one_op_that_writes_real_keyframes():
         assert not rows, "one undo must take the whole propagation back"
 
 
+def test_propagation_sends_small_overlapping_tracker_batches():
+    """A 61-frame camera run must not become one GPU-sized endpoint request."""
+    from quorum.sdk import JobContext
+    with tempfile.TemporaryDirectory() as tmp:
+        video = _make_vfr(Path(tmp))
+        host = _host(tmp)
+        cid, _ = _capture(host, video, probe.timestamps(video)[:24])
+        host.plugins["sam"].settings["track_batch_frames"] = 3
+        SAMP = sys.modules["quorum_plugins.sam"]
+        srv, url = _serve()
+        real = SAMP.endpoint
+        SAMP.endpoint = lambda _p: C.Sam(url, timeout=20)
+        _Fake.seen.clear()
+        try:
+            out = SAMP.track(JobContext(host, host.plugins["sam"], "batched", {
+                "capture_id": cid, "stream": "cam1", "key": "7", "frame": 2,
+                "count": 7, "stride": 1}, cid, "tester"))
+        finally:
+            SAMP.endpoint = real
+            _stop(srv)
+        calls = [body for body in _Fake.seen if "images" in body]
+        assert [len(body["images"]) for body in calls] == [3, 3, 3, 2]
+        assert out["written"] == 7
+
+
 def test_the_seed_frame_the_person_accepted_is_not_overwritten():
     """SAM re-segments the frame it was seeded on. Quietly replacing the mask a
     human looked at and approved is how a tool loses the trust that made them
