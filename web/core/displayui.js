@@ -73,6 +73,7 @@ export function displayButton(app) {
   const hidden = d.hiddenLabels.size;
   return h('button', {
     class: `btn sm${hidden ? ' warn' : ''}`,
+    dataset: { guide: 'display-controls' },
     title: 'How annotations are coloured, and which classes are shown',
     onclick: (e) => {
       const modes = [...d.modes.values()].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));

@@ -104,6 +104,7 @@ function streams(app) {
         h('span', { class: 'hint' }, `${st.width}×${st.height}`),
         h('button', {
           class: `chipbtn${st.enabled === 0 ? '' : ' on'}`, title: 'Show this view in the mosaic',
+          dataset: { guide: 'capture-camera' },
           onclick: async () => {
             await app.api.patchStream(cap.id, st.key, { enabled: st.enabled === 0 });
             await app.reopen();
@@ -140,6 +141,7 @@ function streams(app) {
     h('div', { class: 'row' },
       h('button', {
         class: 'btn sm', title: 'Build browser-playable copies of every stream',
+        dataset: { guide: 'capture-prepare-video' },
         onclick: async () => {
           const f = ui.form({
             which: { type: 'string', default: 'grid,full', label: 'Renditions',
@@ -236,9 +238,11 @@ function data(app) {
     progress,
     h('div', { class: 'row' },
       h('button', { class: 'btn sm primary',
+        dataset: { guide: 'capture-upload' },
         onclick: () => uploadDialog(app, cap.id).then(() => app.renderInspector()) }, 'Upload…'),
       h('button', {
         class: 'btn sm',
+        dataset: { guide: 'capture-link-file' },
         title: 'Point at a file the server can already open — the recordings share, a scratch '
              + 'disk, anywhere inside its media roots. Nothing is copied.',
         onclick: async () => {
