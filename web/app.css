@@ -258,6 +258,21 @@ kbd{
 .toast .t{font-weight:600;margin-bottom:2px}
 .toast .m{color:var(--fg-2);font-size:12px;word-break:break-word}
 
+/* ---------------------------------------------------------- first-run guide */
+.guide-root{position:fixed;inset:0;z-index:70;pointer-events:none}
+.guide-scrim{position:absolute;inset:0;background:rgba(5,8,12,.58);pointer-events:auto}
+.guide-spotlight{position:fixed;border:2px solid var(--accent);border-radius:7px;
+  box-shadow:0 0 0 4px var(--accent-bg),0 0 24px rgba(92,224,122,.45);pointer-events:none}
+.guide-card{position:fixed;width:min(380px,calc(100vw - 24px));padding:16px;
+  background:var(--panel);border:1px solid var(--accent);border-radius:10px;
+  box-shadow:var(--shadow);pointer-events:auto;animation:rise .16s ease-out}
+.guide-card h2{font-size:16px;margin:4px 0 7px}.guide-card p{margin:0;color:var(--fg-2);line-height:1.45}
+.guide-eyebrow{font:600 10px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
+.guide-shortcut{display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding:7px 9px;
+  border-radius:6px;background:var(--sunk);color:var(--fg-2);font-size:12px}
+.guide-shortcut kbd{color:var(--fg);font-size:12px}.guide-example{margin-top:10px;color:var(--fg-2);font-size:12px;line-height:1.45}
+.guide-example b{color:var(--fg)}.guide-card footer{display:flex;gap:7px;justify-content:flex-end;margin-top:15px}
+
 @keyframes fade{from{opacity:0}}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}

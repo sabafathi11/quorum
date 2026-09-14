@@ -320,8 +320,8 @@ export default {
       const sel = selection();
       const one = sel.length === 1 ? sel[0] : null;
 
-      const btn = (label, key, fn, cls = 'btn sm') =>
-        h('button', { class: cls, onclick: fn, title: key }, label, h('kbd', {}, key));
+      const btn = (label, key, fn, cls = 'btn sm', guide = '') =>
+        h('button', { class: cls, dataset: guide ? { guide } : {}, onclick: fn, title: key }, label, h('kbd', {}, key));
 
       return h('div', {},
         ctx.ui.panel('Edit', [
@@ -336,13 +336,13 @@ export default {
             : h('div', { class: 'hint' }, sel.length ? `${sel.length} tracks selected`
               : 'Click a mask. Editing selects one track at a time.'),
           h('div', { class: 'row wrap' },
-            btn('Delete', 'D', del, 'btn sm danger'),
-            btn('Restore', '⇧D', restore),
+            btn('Delete', 'D', del, 'btn sm danger', 'edit-delete'),
+            btn('Restore', '⇧D', restore, 'btn sm', 'edit-restore'),
             btn('Purge', 'P', purge, 'btn sm danger')),
           h('div', { class: 'row wrap' },
             btn('Cut here', 'T', split, 'btn sm primary'),
-            btn('Join', 'J', join),
-            btn('Unjoin', 'U', unjoin)),
+            btn('Join', 'J', join, 'btn sm', 'edit-join'),
+            btn('Unjoin', 'U', unjoin, 'btn sm', 'edit-unjoin')),
           h('div', { class: 'row' },
             h('button', { class: `chipbtn${showingDeleted() ? ' on' : ''}`, onclick: toggleDeleted },
               'show deleted'),

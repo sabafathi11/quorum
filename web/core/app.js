@@ -12,6 +12,7 @@ import { UploadQueue } from './upload.js';
 import { capturePanels, newCaptureDialog, CAPTURE_TOOL } from './capture.js';
 import { uploadDialog } from './upload.js';
 import { displayPanel, displayButton } from './displayui.js';
+import { Onboarding } from './onboarding.js';
 import * as ui from './ui.js';
 import { h, mount, clear, clamp, ago, bytes, keyColor, debounce } from './util.js';
 
@@ -30,6 +31,7 @@ class App {
     // filters into it during activate().
     this.display = new Display(this);
     this.uploads = new UploadQueue(this);
+    this.onboarding = new Onboarding(this);
     this.data = new Map();          // layer id -> LayerData
     this.api.onError = (msg, status) => {
       if (status === 401) return this.askToken(msg);
@@ -778,6 +780,7 @@ class App {
     this.renderRail();
     this.renderInspector();
     this.bus.emit('tool', t);
+    this.onboarding.maybeStart();
   }
 
   // ------------------------------------------------------------------ chrome
@@ -794,6 +797,8 @@ class App {
     return [
       jobs.length ? h('span', { class: 'tag warn' }, `${jobs.length} running`) : null,
       this.store.get('capture') ? displayButton(this) : null,
+      h('button', { class: 'btn sm', dataset: { guide: 'guide-reopen' }, title: 'Show getting-started guide',
+                    onclick: () => this.onboarding.start() }, '?'),
       h('button', {
         class: 'btn sm', title: 'Command palette  (Ctrl+K)', onclick: () => this.keymap.palette(),
       }, '⌘', h('span', { class: 'hint' }, 'K')),
@@ -893,6 +898,9 @@ class App {
       const why = t.plugin ? this.blockedReason(t) : '';
       const b = h('button', {
         class: `railbtn${t.id === cur ? ' on' : ''}${why ? ' blocked' : ''}`,
+        dataset: t.id === 'capture' ? { guide: 'workspace-capture' }
+          : t.id === 'identity' ? { guide: 'workspace-identity' }
+          : t.id === 'edit' ? { guide: 'workspace-edit' } : {},
         title: why ? `${t.title} — not ready: ${why}` : `${t.title}${t.keys ? `  (${t.keys})` : ''}`,
         onclick: () => {
           if (why) {

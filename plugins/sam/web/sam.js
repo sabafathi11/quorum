@@ -490,11 +490,11 @@ export default {
           ctx.ui.stat('target', t ? `${t.stream}/${t.key}` : 'new track'),
           ctx.ui.stat('crop', S.roi ? `${S.roi[2]}px` : S.useRoi ? 'auto' : 'off')),
         h('div', { class: 'row wrap' },
-          h('button', { class: 'btn sm primary', onclick: segment, disabled: !S.pos.length || S.busy },
+          h('button', { class: 'btn sm primary', dataset: { guide: 'sam-send-prompt' }, onclick: segment, disabled: !S.pos.length || S.busy },
             S.busy ? 'Sending prompts...' : 'Send prompts', h('kbd', {}, 'Ctrl+Enter')),
-          h('button', { class: 'btn sm primary', onclick: commit, disabled: !S.preview || S.busy },
+          h('button', { class: 'btn sm primary', dataset: { guide: 'sam-create-track' }, onclick: commit, disabled: !S.preview || S.busy },
             t ? 'Replace this mask' : 'Create a track', h('kbd', {}, '⏎')),
-          h('button', { class: 'btn sm', onclick: () => reset() }, 'Clear', h('kbd', {}, 'Esc'))),
+          h('button', { class: 'btn sm', dataset: { guide: 'sam-clear-prompt' }, onclick: () => reset() }, 'Clear', h('kbd', {}, 'Esc'))),
         t ? null : h('div', { class: 'field' }, h('label', {}, 'Label for the new track'),
           (() => {
             const i = h('input', { class: 'txt', oninput: (e) => { S.label = e.target.value; } });

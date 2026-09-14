@@ -49,6 +49,7 @@ export class Timeline {
     });
     this.frameInput = h('input', {
       class: 'frame-jump mono', type: 'number', inputMode: 'numeric', min: 0,
+      dataset: { guide: 'transport-frame' },
       max: Math.max(0, cap.n_frames - 1), value: 0,
       title: 'Jump to frame (Enter)', 'aria-label': 'Jump to frame',
       onkeydown: (e) => {
@@ -82,6 +83,10 @@ export class Timeline {
         h('span', { class: 'hint' }, 'speed'), this.speed,
         h('button', { class: 'btn sm', title: 'Show / hide lanes', onclick: () => this.toggleLanes() }, 'lanes')),
       this.laneWrap);
+    const transportButtons = this.el.querySelectorAll('.tl-head .btn.icon');
+    transportButtons[0].dataset.guide = 'transport-previous';
+    transportButtons[1].dataset.guide = 'transport-play';
+    transportButtons[2].dataset.guide = 'transport-next';
     this.showLanes = true;
     this.toggleLanes(true);
     this.themeWatch = new MutationObserver(() => {
