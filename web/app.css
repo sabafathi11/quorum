@@ -271,7 +271,8 @@ kbd{
 .guide-shortcut{display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding:7px 9px;
   border-radius:6px;background:var(--sunk);color:var(--fg-2);font-size:12px}
 .guide-shortcut kbd{color:var(--fg);font-size:12px}.guide-example{margin-top:10px;color:var(--fg-2);font-size:12px;line-height:1.45}
-.guide-example b{color:var(--fg)}.guide-card footer{display:flex;gap:7px;justify-content:flex-end;margin-top:15px}
+.guide-example b{color:var(--fg)}.guide-nav{margin-top:12px;color:var(--fg-3);font:11px var(--mono)}
+.guide-card footer{display:flex;gap:7px;justify-content:flex-end;margin-top:15px}
 
 @keyframes fade{from{opacity:0}}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}}

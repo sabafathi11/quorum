@@ -59,7 +59,15 @@ const steps = [
 ];
 
 export class Onboarding {
-  constructor(app) { this.app = app; this.index = 0; this.root = null; }
+  constructor(app) {
+    this.app = app; this.index = 0; this.root = null; this.moving = false;
+    this.keyHandler = (e) => {
+      if (!this.root) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.stop(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); this.move(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); this.move(-1); }
+    };
+  }
 
   maybeStart() {
     if (!localStorage.getItem(KEY) && !this.scheduled && !this.root) {
@@ -73,12 +81,25 @@ export class Onboarding {
     this.index = 0;
     this.root = h('div', { class: 'guide-root' });
     document.getElementById('overlays').append(this.root);
+    document.addEventListener('keydown', this.keyHandler, true);
     await this.show();
   }
 
   stop(complete = true) {
     this.root?.remove(); this.root = null;
+    document.removeEventListener('keydown', this.keyHandler, true);
     if (complete) localStorage.setItem(KEY, '1');
+  }
+
+  async move(direction) {
+    if (this.moving || !this.root) return;
+    const next = this.index + direction;
+    if (next < 0) return;
+    this.moving = true;
+    try {
+      if (next >= steps.length) this.stop();
+      else { this.index = next; await this.show(); }
+    } finally { this.moving = false; }
   }
 
   async show() {
@@ -97,12 +118,11 @@ export class Onboarding {
       h('p', {}, what),
       h('div', { class: 'guide-shortcut' }, h('span', {}, 'Shortcut'), h('kbd', {}, shortcut)),
       h('div', { class: 'guide-example' }, h('b', {}, 'Example'), ` ${example}`),
+      h('div', { class: 'guide-nav' }, 'Use ← / → to move between steps · Esc skips the tour'),
       h('footer', {},
         h('button', { class: 'btn sm', onclick: () => this.stop() }, 'Skip tour'),
-        this.index ? h('button', { class: 'btn sm', onclick: async () => { this.index--; await this.show(); } }, 'Back') : null,
-        h('button', { class: 'btn sm primary', onclick: async () => {
-          if (++this.index >= steps.length) this.stop(); else await this.show();
-        } }, this.index === steps.length - 1 ? 'Finish' : 'Next')));
+        this.index ? h('button', { class: 'btn sm', onclick: () => this.move(-1) }, 'Back') : null,
+        h('button', { class: 'btn sm primary', onclick: () => this.move(1) }, this.index === steps.length - 1 ? 'Finish' : 'Next')));
     const spot = h('div', { class: 'guide-spotlight' });
     spot.style.left = `${Math.max(4, r.left - 5)}px`; spot.style.top = `${Math.max(4, r.top - 5)}px`;
     spot.style.width = `${r.width + 10}px`; spot.style.height = `${r.height + 10}px`;
