@@ -37,6 +37,7 @@ export default {
       if (!stage) return;
       stage.classList.toggle('mask-brush-cursor', !!S.paint && S.paint.mode === 'paint');
       stage.classList.toggle('mask-eraser-cursor', !!S.paint && S.paint.mode === 'erase');
+      stage.classList.toggle('mask-pan-cursor', !!S.paint && S.paint.mode === 'pan');
     };
 
     // A tool that writes through the masks endpoint can reserve its request
@@ -227,7 +228,7 @@ export default {
     ctx.registerFilter({ id: 'paint-preview', title: 'brush preview', structural: true,
       test: (entry) => !!S.paint?.target && entry.object.id === S.paint.target.id });
     ctx.setPointerHandler('edit', ({ phase, world, cell }) => {
-      if (!S.paint || S.busy) return false;
+      if (!S.paint || S.busy || S.paint.mode === 'pan') return false;
       if (phase === 'down') { paintTo(world, cell); return true; }
       if (phase === 'move') paintTo(world, cell);
       if (phase === 'up' || phase === 'cancel') { S.pointer = null; S.paint.last = null; ctx.invalidate(); }
@@ -551,6 +552,10 @@ export default {
         startPaint('paint', S.paint?.fresh || false)],
       ['eraser', 'Erase mask pixels with the selected mask', ['E'], () =>
         startPaint('erase', S.paint?.fresh || false)],
+      ['pan-brush', 'Inspect or pan while a mask draft is open', ['V'], () => {
+        if (!S.paint) return ctx.toast('No brush draft', 'Start Brush, Eraser, or New mask first.', 'warn');
+        S.paint.mode = 'pan'; paintCursor(); ctx.invalidate(); app().renderInspector();
+      }],
       ['newmask', 'Create a new mask with the brush', ['N'], () => startPaint('paint', true)],
       ['brush-smaller', 'Make the mask brush thinner', ['['], () => {
         S.brush = Math.max(1, S.brush - 1); ctx.invalidate(); app().renderInspector();
@@ -609,6 +614,7 @@ export default {
           h('div', { class: 'row wrap' },
             btn('Brush', 'B', () => startPaint('paint', paint?.fresh || false), `btn sm${paint?.mode === 'paint' ? ' primary' : ''}`),
             btn('Eraser', 'E', () => startPaint('erase', paint?.fresh || false), `btn sm${paint?.mode === 'erase' ? ' danger' : ''}`),
+            paint ? btn('Inspect', 'V', () => { paint.mode = 'pan'; paintCursor(); ctx.invalidate(); app().renderInspector(); }, `btn sm${paint.mode === 'pan' ? ' primary' : ''}`) : null,
             btn('New mask', 'N', () => startPaint('paint', true), 'btn sm')),
           h('div', { class: 'field' },
             h('label', {}, `Thickness · ${S.brush} px`),
@@ -620,7 +626,7 @@ export default {
           paint ? h('div', { class: 'row wrap' },
             btn('Save mask', 'Enter', savePaint, 'btn sm primary'),
             btn('Discard', 'Esc', () => discardPaint(), 'btn sm')) : null,
-          h('div', { class: 'hint' }, 'B brush · E eraser · N new mask · [ / ] thickness · Enter save · Esc discard. Alt-drag and middle-drag still pan.'),
+          h('div', { class: 'hint' }, 'V inspect/pan · B brush · E eraser · N new mask · [ / ] thickness · Enter save · Esc discard.'),
         ], { id: 'pixel-brush' }),
         ctx.ui.panel('Edit', [
           h('div', {},
