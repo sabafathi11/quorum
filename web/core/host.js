@@ -167,6 +167,10 @@ export class PluginHost {
     this.laneDecorators = [];
     this.inspectors = new Map();    // tool id -> [fn(app)]
     this.pickHandlers = new Map();  // tool id -> fn({hit, event, right, world, cell})
+    // A pointer gesture is different from a click: painting needs every point
+    // between down and up, but it must still share the viewport's coordinate
+    // system, capture and pan rules.
+    this.pointerHandlers = new Map(); // tool id -> fn({phase, event, world, cell})
     this.problems = [];
   }
 
@@ -224,6 +228,9 @@ export class PluginHost {
       // While `toolId` is the active tool, it decides what a click means.
       // Return false to fall through to the core's default (select what was hit).
       setPickHandler: (toolId, fn) => this.pickHandlers.set(toolId, fn),
+      // Return true from the `down` call to own this one left-button gesture.
+      // The viewport subsequently calls the same handler for move/up/cancel.
+      setPointerHandler: (toolId, fn) => this.pointerHandlers.set(toolId, fn),
       registerInspector: (toolId, fn) => {
         if (!this.inspectors.has(toolId)) this.inspectors.set(toolId, []);
         this.inspectors.get(toolId).push(fn);

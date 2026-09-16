@@ -94,6 +94,22 @@ def test_fold_ignores_other_plugins_ops():
     assert p.deleted["cam1"] == {"1"}
 
 
+def test_pixel_payload_validation_rejects_bad_or_outside_rle():
+    """The brush's boundary is also the API boundary: malformed pixels never
+    reach the materialiser just because a caller skipped the browser."""
+    from fastapi import HTTPException
+    stream = {"width": 8, "height": 6, "n_frames": 10}
+    M._validate_mask_payload({"box": [2, 1, 2, 2], "rle": "0,4"}, stream)
+    for payload in ({"box": [2, 1, 2, 2], "rle": "0,3"},
+                    {"box": [7, 1, 2, 2], "rle": "0,4"},
+                    {"box": [2, 1, 2, 2], "rle": "0,-4"}):
+        try:
+            M._validate_mask_payload(payload, stream)
+            assert False, "malformed paint payload was accepted"
+        except HTTPException as e:
+            assert e.status_code == 400
+
+
 # ----------------------------------------------------------------- segments
 def test_build_segments_cuts_where_you_asked():
     track = {"key": "86", "label": "person",

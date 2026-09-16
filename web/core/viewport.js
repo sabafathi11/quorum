@@ -142,6 +142,16 @@ export class Viewport {
         return;
       }
       if (e.button === 0) {
+        const p = this.toWorld(e.clientX, e.clientY);
+        const handler = this.app.plugins.pointerHandlers.get(this.store.get('tool'));
+        // A tool gets first refusal only for an ordinary left gesture.  Alt and
+        // middle-button panning deliberately remain viewport behaviour.
+        if (handler?.({ phase: 'down', event: e, world: p, cell: this.cellAt(p) })) {
+          drag = { tool: true, handler, moved: 0 };
+          this.stage.setPointerCapture(e.pointerId);
+          e.preventDefault();
+          return;
+        }
         drag = { x: e.clientX, y: e.clientY, tx: this.tx, ty: this.ty, moved: 0 };
         this.stage.setPointerCapture(e.pointerId);
       }
@@ -149,6 +159,11 @@ export class Viewport {
 
     this.stage.addEventListener('pointermove', (e) => {
       if (drag) {
+        if (drag.tool) {
+          const p = this.toWorld(e.clientX, e.clientY);
+          drag.handler({ phase: 'move', event: e, world: p, cell: this.cellAt(p) });
+          return;
+        }
         const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
         drag.moved = Math.max(drag.moved || 0, Math.abs(dx) + Math.abs(dy));
         if (drag.pan || drag.moved > 4) {
@@ -172,6 +187,15 @@ export class Viewport {
 
     const up = (e) => {
       if (!drag) return;
+      if (drag.tool) {
+        const tool = drag;
+        drag = null;
+        try { this.stage.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+        const p = this.toWorld(e.clientX, e.clientY);
+        tool.handler({ phase: e.type === 'pointercancel' ? 'cancel' : 'up', event: e,
+                      world: p, cell: this.cellAt(p) });
+        return;
+      }
       const still = (drag.moved || 0) <= 4;
       const wasClick = still && (!drag.pan || drag.alt);
       this.stage.classList.remove('panning');

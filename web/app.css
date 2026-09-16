@@ -157,6 +157,9 @@ kbd{
 /* ---------------------------------------------------------------- viewport */
 .stage{position:absolute;inset:0;overflow:hidden;cursor:crosshair}
 .stage.panning{cursor:grabbing}
+.stage.mask-brush-cursor{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='rgba(9,24,34,.8)' stroke='%234dccff' stroke-width='2'/%3E%3Cpath d='M12 8v8M8 12h8' stroke='%234dccff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") 12 12,crosshair}
+.stage.mask-eraser-cursor{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='rgba(34,12,12,.85)' stroke='%23e0645c' stroke-width='2'/%3E%3Cpath d='M8 12h8' stroke='%23e0645c' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") 12 12,crosshair}
+.mask-brush-size{flex:1;min-width:120px;accent-color:var(--accent);cursor:pointer}
 .stage .media{position:absolute;transform-origin:0 0;background:#000}
 .stage video{display:block;width:100%;height:100%;object-fit:fill;background:#000}
 .stage canvas.overlay{position:absolute;inset:0;pointer-events:none}

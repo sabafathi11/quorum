@@ -514,9 +514,105 @@ def state_for(host, capture_id: int) -> dict:
             "shadow": (shadow or {}).get("streams", {})}
 
 
+def _int(value, name: str) -> int:
+    """Accept JSON integer values, but never silently round a pixel."""
+    if isinstance(value, bool):
+        raise HTTPException(400, f"{name} must be an integer")
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{name} must be an integer") from None
+    if n != value:
+        raise HTTPException(400, f"{name} must be an integer")
+    return n
+
+
+def _stream_for_edit(host, capture_id: int, stream: str) -> dict:
+    row = host.db.one("SELECT * FROM streams WHERE capture_id=? AND key=?", capture_id, stream)
+    if row is None:
+        raise HTTPException(400, f"unknown stream: {stream or '(blank)'}")
+    return dict(row)
+
+
+def _validate_mask_payload(payload, stream: dict) -> None:
+    """Keep the RLE boundary strict: malformed pixel data must not make it to
+    the materialiser where it could corrupt an otherwise valid layer."""
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "mask payload must be an object")
+    box = payload.get("box")
+    if not isinstance(box, list) or len(box) != 4:
+        raise HTTPException(400, "mask payload needs box [left, top, width, height]")
+    l, t, w, h = (_int(v, "mask box") for v in box)
+    if l < 0 or t < 0 or w <= 0 or h <= 0:
+        raise HTTPException(400, "mask box must be inside the image and non-empty")
+    if l + w > int(stream["width"]) or t + h > int(stream["height"]):
+        raise HTTPException(400, "mask box lies outside the stream image")
+    rle = payload.get("rle")
+    if not isinstance(rle, str):
+        raise HTTPException(400, "mask RLE must be a string")
+    try:
+        runs = [int(part) for part in rle.split(",")] if rle else []
+    except ValueError:
+        raise HTTPException(400, "mask RLE contains a non-integer run") from None
+    if any(n < 0 for n in runs) or sum(runs) != w * h:
+        raise HTTPException(400, "mask RLE runs must exactly cover its box")
+
+
+def _validate_frame(frame, stream: dict) -> int:
+    f = _int(frame, "frame")
+    # An `outside` terminator may live exactly one frame beyond the last image;
+    # this is how a one-frame created track stops instead of lingering forever.
+    if f < 0 or f > int(stream["n_frames"]):
+        raise HTTPException(400, "frame lies outside this stream")
+    return f
+
+
+def _validate_pixel_edit(verb: str, payload: dict, stream: dict) -> None:
+    if verb == "keyframe":
+        _validate_frame(payload.get("frame"), stream)
+        item = payload.get("payload")
+        if item is None:
+            return                         # an explicit keyframe removal
+        _validate_mask_payload(item, stream)
+    elif verb == "keyframes":
+        items = payload.get("frames")
+        if not isinstance(items, list) or not items:
+            raise HTTPException(400, "keyframes needs at least one frame")
+        for item in items:
+            if not isinstance(item, dict):
+                raise HTTPException(400, "each keyframe must be an object")
+            _validate_frame(item.get("frame"), stream)
+            _validate_mask_payload(item.get("payload"), stream)
+    elif verb == "create":
+        items = payload.get("frames")
+        if not isinstance(items, list) or not items:
+            raise HTTPException(400, "create needs at least one painted frame")
+        for item in items:
+            if not isinstance(item, dict):
+                raise HTTPException(400, "each created frame must be an object")
+            _validate_frame(item.get("frame"), stream)
+            _validate_mask_payload(item.get("payload"), stream)
+
+
 @PLUGIN.route.get("/{capture_id}/state")
 def get_state(capture_id: int, request: Request, user: dict = Depends(current_user)):
     return state_for(request.app.state.host, capture_id)
+
+
+@PLUGIN.route.get("/{capture_id}/newkey")
+def newkey(capture_id: int, request: Request, stream: str,
+           user: dict = Depends(current_user)):
+    """Reserve a readable, collision-free key for a hand-painted track."""
+    host = request.app.state.host
+    _stream_for_edit(host, capture_id, stream)
+    used = {str(r["key"]) for r in host.db.all(
+        "SELECT o.key FROM objects o JOIN streams s ON s.id=o.stream_id "
+        "JOIN layers l ON l.id=o.layer_id WHERE l.capture_id=? AND s.key=?", capture_id, stream)}
+    used.update(fold(host.ops_since(capture_id, 0)).created.get(stream, {}))
+    n = 1
+    while f"paint-{n}" in used:
+        n += 1
+    return {"key": f"paint-{n}"}
 
 
 @PLUGIN.route.post("/{capture_id}/op")
@@ -536,7 +632,13 @@ def post_edit(capture_id: int, request: Request, body: dict = Body(...),
                              ([payload["key"]] if payload.get("key") is not None else []))]
     verb = kind.split(".", 1)[1]
 
-    if verb in ("split", "join", "unjoin", "keyframe", "keyframes") and not keys:
+    # Pixel-bearing operations all pass through the same validation whether
+    # they came from this brush, SAM, or a direct API caller.
+    if verb in ("keyframe", "keyframes", "create"):
+        st = _stream_for_edit(host, capture_id, stream)
+        _validate_pixel_edit(verb, payload, st)
+
+    if verb in ("split", "join", "unjoin", "keyframe", "keyframes", "create") and not keys:
         raise HTTPException(400, f"{verb} needs at least one track")
     if verb == "split":
         for k in keys:

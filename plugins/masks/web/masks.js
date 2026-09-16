@@ -4,6 +4,8 @@
 // means "this person". Getting that backwards is how the desktop tool let one
 // keystroke delete a track in six cameras at once.
 
+import { decodeRLE } from '../../mask_layer/web/mask.js';
+
 const NEEDS_REBUILD = new Set(['split', 'unsplit', 'join', 'unjoin', 'keyframe', 'keyframes',
                                'create', 'purge', 'unpurge']);
 
@@ -17,14 +19,228 @@ export default {
       sourceLayer: null, derivedLayer: null,
       showDeleted: true,
       loaded: false, busy: false, localOps: new Set(), localRefs: new Set(),
+      // A paint session remains local until Save. Its bitmap is in native
+      // stream pixels, so zoom and layout never affect a one-pixel change.
+      paint: null, brush: 5, label: 'mask', pointer: null,
     };
     const setOf = (m, s) => new Set(m[s] || []);
+    const streamOf = (key) => (ctx.store.get('capture')?.streams || []).find((s) => s.key === key);
+    const cellOf = (key) => (ctx.store.get('capture')?.layout?.cells || [])
+      .find((c) => c.stream === key);
+    const streamFrame = (object) => {
+      const data = object?.layer_id != null
+        ? app().layerData((l) => l.id === object.layer_id) : app().primaryData();
+      return data ? data.mapFrame(object.stream, ctx.store.get('frame')) : ctx.store.get('frame');
+    };
+    const paintCursor = () => {
+      const stage = ctx.viewport?.stage;
+      if (!stage) return;
+      stage.classList.toggle('mask-brush-cursor', !!S.paint && S.paint.mode === 'paint');
+      stage.classList.toggle('mask-eraser-cursor', !!S.paint && S.paint.mode === 'erase');
+    };
 
     // A tool that writes through the masks endpoint can reserve its request
     // token before the request leaves the browser. WebSocket delivery is not
     // ordered against the HTTP response, so this also covers an early echo.
     ctx.on('masks.local-ref', (ref) => { if (ref) S.localRefs.add(ref); });
     ctx.on('masks.cancel-local-ref', (ref) => S.localRefs.delete(ref));
+
+    // ---------------------------------------------------------- pixel paint
+    const activeEntry = (object) => ctx.entriesAt(ctx.store.get('frame'))
+      .find((entry) => entry.object.id === object.id) || null;
+    const refreshPaint = (p, rect = null) => {
+      const x0 = rect ? Math.max(0, rect.x0) : 0;
+      const y0 = rect ? Math.max(0, rect.y0) : 0;
+      const x1 = rect ? Math.min(p.width, rect.x1) : p.width;
+      const y1 = rect ? Math.min(p.height, rect.y1) : p.height;
+      if (x1 <= x0 || y1 <= y0) return;
+      const image = new ImageData(x1 - x0, y1 - y0);
+      const px = image.data;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        if (!p.pixels[y * p.width + x]) continue;
+        const i = ((y - y0) * (x1 - x0) + x - x0) * 4;
+        px[i] = 77; px[i + 1] = 204; px[i + 2] = 255; px[i + 3] = 230;
+      }
+      const g = p.canvas.getContext('2d');
+      g.clearRect(x0, y0, x1 - x0, y1 - y0);
+      g.putImageData(image, x0, y0);
+    };
+
+    const startPaint = (mode, fresh = false) => {
+      if (S.paint) {
+        if (S.paint.fresh === fresh) {
+          S.paint.mode = mode; paintCursor(); ctx.invalidate(); app().renderInspector(); return true;
+        }
+        discardPaint(true);
+      }
+      let target = null, entry = null;
+      if (!fresh) {
+        const sel = selection();
+        if (sel.length !== 1) {
+          ctx.toast('Select one mask', 'Click the mask in this frame, then choose Brush or Eraser.', 'warn');
+          return false;
+        }
+        target = sel[0]; entry = activeEntry(target);
+        if (!entry) {
+          ctx.toast('Mask is not in this frame', 'Select a mask visible on the current frame.', 'warn');
+          return false;
+        }
+      }
+      const st = target ? streamOf(target.stream) : null;
+      const init = (stream, frame, payload = null) => {
+        const pixels = new Uint8Array(stream.width * stream.height);
+        if (payload) {
+          const [l, t, w, h] = payload.box;
+          const alpha = decodeRLE(payload.rle, w, h);
+          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            const xx = l + x, yy = t + y;
+            if (alpha[y * w + x] && xx >= 0 && yy >= 0 && xx < stream.width && yy < stream.height)
+              pixels[yy * stream.width + xx] = 1;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = stream.width; canvas.height = stream.height;
+        S.paint = { mode, fresh, target, stream: stream.key, frame, width: stream.width,
+                    height: stream.height, pixels, canvas, dirty: false, last: null };
+        refreshPaint(S.paint);
+        paintCursor(); ctx.display.changed();
+        ctx.invalidate(); app().renderInspector();
+      };
+      if (target) init(st, streamFrame(target), entry.payload);
+      else { S.paint = { mode, fresh: true, target: null, pending: true }; paintCursor(); }
+      return true;
+    };
+
+    const discardPaint = (quiet = false) => {
+      if (!S.paint) return;
+      S.paint = null; S.pointer = null;
+      paintCursor(); ctx.display.changed(); ctx.invalidate(); app().renderInspector();
+      if (!quiet) ctx.toast('Brush changes discarded', 'Nothing was written.');
+    };
+
+    const pointInStream = (world, cell, p) => {
+      if (!cell || cell.stream !== p.stream) return null;
+      const x = Math.floor((world.x - cell.x) * p.width / cell.w);
+      const y = Math.floor((world.y - cell.y) * p.height / cell.h);
+      return x >= 0 && y >= 0 && x < p.width && y < p.height ? { x, y } : null;
+    };
+    const stamp = (p, point) => {
+      const radius = Math.max(0.5, S.brush / 2);
+      const x0 = Math.max(0, Math.floor(point.x - radius));
+      const y0 = Math.max(0, Math.floor(point.y - radius));
+      const x1 = Math.min(p.width, Math.ceil(point.x + radius + 1));
+      const y1 = Math.min(p.height, Math.ceil(point.y + radius + 1));
+      let changed = false;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const dx = x - point.x, dy = y - point.y;
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const i = y * p.width + x, next = p.mode === 'erase' ? 0 : 1;
+        if (p.pixels[i] !== next) { p.pixels[i] = next; changed = true; }
+      }
+      if (changed) { p.dirty = true; refreshPaint(p, { x0, y0, x1, y1 }); }
+    };
+    const paintTo = (world, cell) => {
+      let p = S.paint;
+      if (!p) return;
+      if (p.pending) {
+        if (!cell) return;
+        const stream = streamOf(cell.stream);
+        const canvas = document.createElement('canvas');
+        canvas.width = stream.width; canvas.height = stream.height;
+        p = S.paint = { mode: p.mode, fresh: true, target: null, stream: cell.stream,
+                        frame: streamFrame({ stream: cell.stream, layer_id: null }), width: stream.width,
+                        height: stream.height, pixels: new Uint8Array(stream.width * stream.height),
+                        canvas, dirty: false, last: null };
+        paintCursor();
+      }
+      const now = pointInStream(world, cell, p);
+      if (!now) return;
+      const last = p.last || now;
+      const steps = Math.max(1, Math.ceil(Math.hypot(now.x - last.x, now.y - last.y) / 0.5));
+      for (let i = 0; i <= steps; i++) stamp(p, {
+        x: Math.round(last.x + (now.x - last.x) * i / steps),
+        y: Math.round(last.y + (now.y - last.y) * i / steps),
+      });
+      p.last = now; S.pointer = { world, cell };
+      ctx.invalidate();
+    };
+
+    const payloadFromPaint = (p) => {
+      let x0 = p.width, y0 = p.height, x1 = -1, y1 = -1;
+      for (let y = 0; y < p.height; y++) for (let x = 0; x < p.width; x++) if (p.pixels[y * p.width + x]) {
+        x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+      }
+      if (x1 < x0) return null;
+      const w = x1 - x0 + 1, h = y1 - y0 + 1, runs = [];
+      let on = false, count = 0;
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const next = !!p.pixels[y * p.width + x];
+        if (next !== on) { runs.push(count); count = 0; on = next; }
+        count++;
+      }
+      runs.push(count);
+      return { box: [x0, y0, w, h], rle: runs.join(',') };
+    };
+
+    const savePaint = async () => {
+      const p = S.paint;
+      if (!p) return;
+      if (!p.dirty) return discardPaint(true);
+      const payload = payloadFromPaint(p);
+      if (!payload && p.fresh) {
+        ctx.toast('Nothing painted', 'Paint at least one pixel before creating a mask.', 'warn'); return;
+      }
+      const cap = ctx.store.get('capture');
+      const empty = { box: [0, 0, 1, 1], rle: '1' };
+      const ref = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      ctx.emit('masks.local-ref', ref); S.busy = true;
+      try {
+        let key = p.target?.key;
+        let kind, body;
+        if (p.fresh) {
+          ({ key } = await ctx.call(`/${cap.id}/newkey?stream=${encodeURIComponent(p.stream)}`, { quiet: true }));
+          kind = 'create';
+          body = { stream: p.stream, key, label: S.label || 'mask', frames: [
+            { frame: p.frame, outside: 0, payload },
+            { frame: p.frame + 1, outside: 1, payload },
+          ] };
+        } else {
+          kind = 'keyframe';
+          body = { stream: p.stream, key, frame: p.frame,
+                   payload: { ...(payload || empty), outside: payload ? 0 : 1 } };
+        }
+        const r = await ctx.api.plugin('masks', `/${cap.id}/op`, {
+          method: 'POST', body: { kind, payload: body, client_ref: ref }, quiet: true });
+        S.localOps.add(r.op.id); Object.assign(S, r.state); ctx.display.changed();
+        app().bus.emit('op', { ...r.op, _source: 'local' });
+        discardPaint(true);
+        await ctx.reloadLayer(r.materialised?.layer_id);
+        const made = app().findObject(p.stream, key);
+        if (made) { app().select([made.id], 'set'); app().pulse([made.id], { ms: 1200 }); }
+        ctx.toast(p.fresh ? 'Mask created' : 'Mask saved', `${p.stream}/${key} at frame ${p.frame}. Ctrl+Z takes it back.`);
+      } catch (e) {
+        ctx.emit('masks.cancel-local-ref', ref);
+        ctx.toast('Could not save brush changes', e.message || String(e), e.status === 409 ? 'warn' : 'err');
+      } finally { S.busy = false; app().renderInspector(); }
+    };
+
+    ctx.registerFilter({ id: 'paint-preview', title: 'brush preview', structural: true,
+      test: (entry) => !!S.paint?.target && entry.object.id === S.paint.target.id });
+    ctx.setPointerHandler('edit', ({ phase, world, cell }) => {
+      if (!S.paint || S.busy) return false;
+      if (phase === 'down') { paintTo(world, cell); return true; }
+      if (phase === 'move') paintTo(world, cell);
+      if (phase === 'up' || phase === 'cancel') { S.pointer = null; S.paint.last = null; ctx.invalidate(); }
+      return true;
+    });
+    ctx.store.on(['frame'], () => {
+      if (!S.paint) return;
+      discardPaint(true);
+      ctx.toast('Brush preview discarded', 'It belonged to the frame you left.', 'warn');
+    });
+    ctx.on('tool', (tool) => {
+      if (S.paint && tool?.id !== 'edit') discardPaint(true);
+    });
 
     // ------------------------------------------------------------- state
     const load = async () => {
@@ -37,7 +253,7 @@ export default {
       app().renderInspector();
       ctx.invalidate();
     };
-    ctx.on('capture', load);
+    ctx.on('capture', () => { discardPaint(true); load(); });
     if (ctx.store.get('capture')) load();
 
     // Another person's edit, or an undo, arrives as an op. Rebuild what it
@@ -152,6 +368,10 @@ export default {
       return out;
     };
     const need = (what) => {
+      if (S.paint) {
+        ctx.toast('Finish the brush first', 'Save with Enter or discard with Esc before another track edit.', 'warn');
+        return null;
+      }
       const sel = selection();
       if (!sel.length) { ctx.toast('Nothing selected', `Click a mask to ${what}.`, 'warn'); return null; }
       const streams = new Set(sel.map((o) => o.stream));
@@ -286,6 +506,36 @@ export default {
       ctx.toast('Deleted tracks', show ? 'shown, tagged DEL' : 'hidden');
     };
 
+    // The active bitmap is rendered above the normal layers.  Its target is
+    // filtered while painting, which is what makes erased pixels visibly gone
+    // instead of revealing the old mask below the preview.
+    ctx.on('drawn', ({ g, view }) => {
+      const p = S.paint;
+      if (ctx.store.get('tool') !== 'edit' || !p || p.pending) return;
+      const cell = cellOf(p.stream);
+      if (!cell) return;
+      g.save();
+      g.imageSmoothingEnabled = false;
+      g.globalAlpha = 0.78;
+      g.drawImage(p.canvas, cell.x, cell.y, cell.w, cell.h);
+      g.globalAlpha = 1;
+      g.strokeStyle = p.mode === 'erase' ? '#E0645C' : '#4DCCFF';
+      g.lineWidth = 1.5 / view.scale;
+      g.strokeRect(cell.x, cell.y, cell.w, cell.h);
+      if (S.pointer?.cell?.stream === p.stream) {
+        const q = pointInStream(S.pointer.world, cell, p);
+        if (q) {
+          const x = cell.x + q.x * cell.w / p.width, y = cell.y + q.y * cell.h / p.height;
+          const rx = Math.max(0.5, S.brush / 2) * cell.w / p.width;
+          const ry = Math.max(0.5, S.brush / 2) * cell.h / p.height;
+          g.setLineDash([3 / view.scale, 2 / view.scale]);
+          g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); g.stroke();
+          g.setLineDash([]);
+        }
+      }
+      g.restore();
+    });
+
     for (const [id, title, keys, run] of [
       ['delete', 'Delete the selected tracks', ['D', 'Del'], del],
       ['restore', 'Restore deleted tracks', ['Shift+D', 'Shift+Del'], restore],
@@ -294,6 +544,25 @@ export default {
       ['join', 'Join the selected tracks into one', ['J'], join],
       ['unjoin', 'Take a joined track apart', ['U'], unjoin],
       ['showdeleted', 'Show / hide deleted tracks', ['H'], toggleDeleted],
+      // When a draft is already open, B/E are mode switches for that exact
+      // bitmap — including a not-yet-created mask. They must never throw the
+      // draft away and fall back to selecting an older mask.
+      ['brush', 'Paint mask pixels with the selected mask', ['B'], () =>
+        startPaint('paint', S.paint?.fresh || false)],
+      ['eraser', 'Erase mask pixels with the selected mask', ['E'], () =>
+        startPaint('erase', S.paint?.fresh || false)],
+      ['newmask', 'Create a new mask with the brush', ['N'], () => startPaint('paint', true)],
+      ['brush-smaller', 'Make the mask brush thinner', ['['], () => {
+        S.brush = Math.max(1, S.brush - 1); ctx.invalidate(); app().renderInspector();
+      }],
+      ['brush-larger', 'Make the mask brush thicker', [']'], () => {
+        S.brush = Math.min(256, S.brush + 1); ctx.invalidate(); app().renderInspector();
+      }],
+      ['save-brush', 'Save the painted mask', ['Enter'], savePaint],
+      ['discard-brush', 'Discard the painted mask changes', ['Esc'], () => discardPaint()],
+      ['protect-brush', 'Discard active brush preview before undoing history', ['Ctrl+Z'], () => {
+        if (S.paint) discardPaint(); else app().undo();
+      }],
     ]) ctx.registerCommand({ id, title, keys, tool: 'edit', group: 'Edit', run });
 
     // ------------------------------------------------------------- lanes
@@ -323,7 +592,36 @@ export default {
       const btn = (label, key, fn, cls = 'btn sm', guide = '') =>
         h('button', { class: cls, dataset: guide ? { guide } : {}, onclick: fn, title: key }, label, h('kbd', {}, key));
 
+      const paint = S.paint;
+      const brushInput = h('input', {
+        class: 'mask-brush-size', type: 'range', min: 1, max: 256,
+        oninput: (e) => { S.brush = Number(e.target.value); ctx.invalidate(); app().renderInspector(); },
+      });
+      brushInput.value = S.brush;
+
       return h('div', {},
+        ctx.ui.panel('Pixel brush', [
+          h('div', { class: 'hint' }, paint
+            ? (paint.pending ? 'New mask: click and drag inside a camera to begin.'
+              : `${paint.mode === 'erase' ? 'Erasing' : 'Painting'} ${paint.stream} at frame ${paint.frame}. ` +
+                'The preview is in native image pixels; save creates one undoable edit.')
+            : 'Select one visible mask, then paint or erase it. New mask starts from an empty frame.'),
+          h('div', { class: 'row wrap' },
+            btn('Brush', 'B', () => startPaint('paint', paint?.fresh || false), `btn sm${paint?.mode === 'paint' ? ' primary' : ''}`),
+            btn('Eraser', 'E', () => startPaint('erase', paint?.fresh || false), `btn sm${paint?.mode === 'erase' ? ' danger' : ''}`),
+            btn('New mask', 'N', () => startPaint('paint', true), 'btn sm')),
+          h('div', { class: 'field' },
+            h('label', {}, `Thickness · ${S.brush} px`),
+            h('div', { class: 'row' }, brushInput,
+              btn('−', '[', () => { S.brush = Math.max(1, S.brush - 1); ctx.invalidate(); app().renderInspector(); }, 'btn sm'),
+              btn('+', ']', () => { S.brush = Math.min(256, S.brush + 1); ctx.invalidate(); app().renderInspector(); }, 'btn sm'))),
+          paint?.fresh ? h('div', { class: 'field' }, h('label', {}, 'New mask label'),
+            (() => { const input = h('input', { class: 'txt', oninput: (e) => { S.label = e.target.value; } }); input.value = S.label; return input; })()) : null,
+          paint ? h('div', { class: 'row wrap' },
+            btn('Save mask', 'Enter', savePaint, 'btn sm primary'),
+            btn('Discard', 'Esc', () => discardPaint(), 'btn sm')) : null,
+          h('div', { class: 'hint' }, 'B brush · E eraser · N new mask · [ / ] thickness · Enter save · Esc discard. Alt-drag and middle-drag still pan.'),
+        ], { id: 'pixel-brush' }),
         ctx.ui.panel('Edit', [
           h('div', {},
             ctx.ui.stat('deleted', String(count(S.deleted))),
