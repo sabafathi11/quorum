@@ -7,7 +7,7 @@
 //   node tests/smoke.mjs
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const BASE = process.env.QUORUM_URL || 'http://127.0.0.1:8600';
@@ -86,7 +86,7 @@ window.fetch = async (u, o) => {
   if (!url.includes('/api/session')) return res;
   const body = await res.json();
   for (const m of body.plugins) {
-    if (m.web) m.web = `file://${root}${m.web}`;
+    if (m.web) m.web = pathToFileURL(resolve(root, `.${m.web}`)).href;
   }
   return new globalThis.Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 };
@@ -111,7 +111,7 @@ window.addEventListener('error', (e) => note(`window error: ${e.message}`));
 process.on('unhandledRejection', (e) => note(`unhandled rejection: ${e?.message || e}`));
 
 // ---- boot ----------------------------------------------------------------
-const app = (await import(resolve(root, 'web/core/app.js'))).default;
+const app = (await import(pathToFileURL(resolve(root, 'web/core/app.js')).href)).default;
 
 // Wait for boot to *finish*, not for 700 ms to pass.
 //
@@ -956,7 +956,7 @@ await step('the upload dialog is built from what plugins declared, and nothing e
 // ---- invariants ----------------------------------------------------------
 // The steps above each pin one thing that once went wrong. These hold over the
 // whole capture and every registered tool, so they catch the *next* one too.
-const { checkAll, CHECKS } = await import(resolve(here, 'invariants.mjs'));
+const { checkAll, CHECKS } = await import(pathToFileURL(resolve(here, 'invariants.mjs')).href);
 
 const invariantStep = async (where) => {
   for (const f of SAMPLE_LOAD_FRAMES) { app.setFrame(f); await wait(120); }
