@@ -177,6 +177,31 @@ def _hidden_objects(host, capture_id: int, want: ObjectFilter) -> set:
     return {r["id"] for r in rows}
 
 
+def _ignored_focus(host, capture_id: int, proposal: dict) -> bool:
+    """Hold back a review item only when every piece of its evidence is inside
+    an ignore zone on the frame it asks the reviewer to inspect."""
+    ids = list((proposal.get("focus") or {}).get("objects") or [])
+    frame = (proposal.get("focus") or {}).get("frame")
+    plugin = host.plugins.get("ignore_zones")
+    if not ids or frame is None or plugin is None:
+        return False
+    try:
+        ignored = sys.modules[plugin.module_name].ignored_object
+        for oid in ids:
+            row = host.db.one("SELECT s.key AS stream, s.frame_map FROM objects o "
+                              "JOIN streams s ON s.id=o.stream_id WHERE o.id=?", oid)
+            if row is None:
+                return False
+            import numpy as np
+            fm = np.frombuffer(row["frame_map"], dtype="<i4") if row["frame_map"] else None
+            sf = int(fm[min(int(frame), len(fm) - 1)]) if fm is not None and len(fm) else int(frame)
+            if not ignored(host, capture_id, row["stream"], oid, sf):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 @PLUGIN.route.get("/{capture_id}")
 def list_proposals(capture_id: int, request: Request, state: str = "", filter: str = "",
                    user: dict = Depends(current_user)):
@@ -209,11 +234,21 @@ def list_proposals(capture_id: int, request: Request, state: str = "", filter: s
                 continue
             keep.append(p)
         items = keep
+    # A zone is a reviewer instruction, not a rejection: keep the proposal in
+    # storage and simply do not offer evidence that is entirely out of scope.
+    hidden_by_zone = 0
+    keep = []
+    for p in items:
+        if _ignored_focus(host, capture_id, p):
+            hidden_by_zone += 1
+            continue
+        keep.append(p)
+    items = keep
     counts = {}
     for p in q["items"]:
         counts[p["state"]] = counts.get(p["state"], 0) + 1
     return {"items": items, "counts": counts, "version": ver, "restaled": changed,
-            "withheld": withheld}
+            "withheld": withheld + hidden_by_zone}
 
 
 @PLUGIN.route.post("/{capture_id}/{pid}/{decision}")

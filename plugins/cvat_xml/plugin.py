@@ -172,6 +172,9 @@ def export_xml(ctx):
     out.mkdir(parents=True, exist_ok=True)
 
     streams = ctx.db.all("SELECT * FROM streams WHERE capture_id=? ORDER BY idx", cid)
+    ignore_plugin = ctx.host.plugins.get("ignore_zones")
+    ignore_mod = sys.modules[ignore_plugin.module_name] if ignore_plugin else None
+    zones = ignore_mod.state_for(ctx.host, cid)["zones"] if ignore_mod else {}
     written = []
     for i, st in enumerate(streams):
         ctx.check()
@@ -190,7 +193,26 @@ def export_xml(ctx):
                  f'</task><source>quorum</source></meta>']
         for n, o in enumerate(objs):
             lines.append(f'  <track id="{n}" label="{escape(o["label"] or "object")}" source="quorum">')
-            for sh in ctx.db.all("SELECT * FROM shapes WHERE object_id=? ORDER BY frame", o["id"]):
+            source_shapes = [dict(sh) for sh in ctx.db.all(
+                "SELECT * FROM shapes WHERE object_id=? ORDER BY frame", o["id"])]
+            # CVAT interpolates between keyframes. An ignored frame therefore
+            # needs an explicit `outside=1` keyframe *and* a restore on the
+            # following frame, otherwise omitting one XML row would silently
+            # leave the object active through the excluded region.
+            emitted = {int(sh["frame"]): sh for sh in source_shapes}
+            for raw_frame in (zones.get(st["key"], {}) or {}):
+                f = int(raw_frame)
+                prior = next((sh for sh in reversed(source_shapes) if sh["frame"] <= f), None)
+                if prior is None or prior["outside"] or not ignore_mod.ignored_object(ctx.host, cid, st["key"], o["id"], f):
+                    continue
+                hidden = dict(prior); hidden["frame"] = f; hidden["outside"] = 1; emitted[f] = hidden
+                restore_at = f + 1
+                if restore_at < st["n_frames"] and restore_at not in emitted:
+                    after = next((sh for sh in reversed(source_shapes) if sh["frame"] <= restore_at), None)
+                    if after is not None and not after["outside"] and not ignore_mod.ignored_object(
+                            ctx.host, cid, st["key"], o["id"], restore_at):
+                        back = dict(after); back["frame"] = restore_at; back["outside"] = 0; emitted[restore_at] = back
+            for sh in [emitted[f] for f in sorted(emitted)]:
                 p = json.loads(sh["payload"])
                 box = p.get("box")
                 if box and "rle" in p:

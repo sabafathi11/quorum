@@ -299,6 +299,13 @@ def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
                 s for s in sp
                 if not hidden(skey, s[3], lid) and s[2] not in excluded)
     fmaps = _frame_maps(host, capture_id)
+    ignore = host.plugins.get("ignore_zones")
+    ignored_at = None
+    if ignore is not None:
+        try:
+            ignored_at = sys.modules[ignore.module_name].ignored_object
+        except Exception:
+            pass
     n_frames = host.db.scalar("SELECT n_frames FROM captures WHERE id=?", capture_id) or 0
 
     # Every span, in capture frames. searchsorted inverts a nondecreasing map.
@@ -342,6 +349,14 @@ def scan(host, capture_id: int, layer_id: int = 0, frame: int = 0,
         unset = []
         by_cid: dict[tuple, list] = {}
         for (_, _, skey, oid, okey) in live.values():
+            # Ignore zones are defined in a stream's source-frame coordinates;
+            # the walk is in capture frames, so map before asking the shared
+            # exact-pixel predicate. A zone never deletes an identity — it
+            # only says this occurrence is out of scope for review.
+            fm = fmaps.get(skey)
+            sf = int(fm[min(m, len(fm) - 1)]) if fm is not None and len(fm) else m
+            if ignored_at and ignored_at(host, capture_id, skey, oid, sf):
+                continue
             cid = (assign.get(skey) or {}).get(okey)
             if cid is None:
                 unset.append((skey, oid, okey))
